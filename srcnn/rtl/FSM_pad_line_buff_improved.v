@@ -230,6 +230,12 @@ always @(posedge i_clk or negedge i_rstn) begin
                         r_wgap_cnt            <= lut_sub_max - 2'd1;
                         if (r_word_idx == 4'd0) begin
                             o_wr_addr_rst <= 1'b1;
+                            // §3.3(a) prefetch 1회 (L2/L3만): 첫 weight read와 동시에
+                            // intermediate URAM word#0 read 발행. uram_en_cnt 는 0 유지.
+                            if (layer_cnt != 2'd0) begin
+                                o_intermid_uram_rd_en   <= 1'b1;
+                                o_intermid_uram_rd_addr <= {(MEM_ADDR_WIDTH-2){1'b0}};
+                            end
                         end
                     end else begin
                         r_wgap_cnt            <= r_wgap_cnt - 2'd1;
@@ -258,9 +264,11 @@ always @(posedge i_clk or negedge i_rstn) begin
                         o_input_bram_rd_en   <= 1'b1;
                         o_input_bram_rd_addr <= r_bram_addr;
                     end else begin
+                        // §3.3(b) read@en_cnt==0 + 주소 (r_bram>>2)+1 (word#1부터).
+                        // word#0 은 S_W_READ prefetch 로 이미 발행됨.
                         fifo_rd_en              <= 1'b1;
-                        o_intermid_uram_rd_addr <= r_bram_addr[MEM_ADDR_WIDTH-1:2];
-                        if(uram_en_cnt == 2'b11) begin
+                        o_intermid_uram_rd_addr <= r_bram_addr[MEM_ADDR_WIDTH-1:2] + 1'b1;
+                        if(uram_en_cnt == 2'b00) begin
                             o_intermid_uram_rd_en <= 1'b1;
                         end
                         uram_en_cnt <= uram_en_cnt + 1'b1;
@@ -286,8 +294,11 @@ always @(posedge i_clk or negedge i_rstn) begin
                         layer_cnt  <= layer_cnt + 2'd1;
                     end
                 end else begin
-                    // 파이프라인 잔여 연산이 모두 빠져나오는 최종 시점에 완료 신호 캐치
-                    if(i_uram_we) begin
+                    // §3.3(c) 완료 판정을 i_adder_done(=pe_done, top에서 +2clk 추가 지연)
+                    // 으로 바꿔, 마지막 pack write 가 현재 레이어 라우팅에서 끝난 뒤
+                    // 레이어 전환되도록 한다. 구 i_uram_we 방식은 첫 pack we 에서
+                    // 즉시 exit 해 tail pack 을 유실시키므로 폐기.
+                    if(i_adder_done) begin
                         o_done <= 1'b1;
                     end
                 end

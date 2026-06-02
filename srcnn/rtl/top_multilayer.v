@@ -119,6 +119,10 @@ module top #(
     // =========================================================================
     wire [63:0]                uram_L1_dout [0:3];
     wire [63:0]                uram_L2_dout [0:1];
+    // URAM read valid (§5): rd_en -> 1clk 후 rd_valid+dout 유효.
+    //   FIFO wr_en 을 rd_valid 로 잡으면 same clk 에 dout 이 안착한 상태로 push.
+    wire                       uram_L1_rd_valid [0:3];
+    wire                       uram_L2_rd_valid [0:1];
 
     // uram_bank 라우팅 출력
     wire [3:0]                 ub_L1_we;
@@ -293,7 +297,7 @@ module top #(
                 .wr_din   (pack_L1_dout[b]),
                 .rd_en    (ub_L1_re[b]),
                 .rd_addr  (ub_L1_rd_addr),
-                .rd_valid (),
+                .rd_valid (uram_L1_rd_valid[b]),
                 .rd_dout  (uram_L1_dout[b])
             );
         end
@@ -308,7 +312,7 @@ module top #(
                 .wr_din   (pack_main_dout),
                 .rd_en    (ub_L2_re[b]),
                 .rd_addr  (ub_L2_rd_addr),
-                .rd_valid (),
+                .rd_valid (uram_L2_rd_valid[b]),
                 .rd_dout  (uram_L2_dout[b])
             );
         end
@@ -327,13 +331,19 @@ module top #(
         .din (w_fifo_rd_en), .dout (w_fifo_valid_common)
     );
 
+    // FIFO srst: out_ch / layer 전환 사이 leftover 픽셀(=마지막 OOB URAM read 4픽셀)
+    //   을 지워 다음 out_ch 의 prefetch 가 첫 4 pop 으로 곧장 잡히게 한다.
+    //   w_dispatch_rst 는 FSM 이 S_DONE→IDLE 시 1clk 펄스로 발사 (모든 경계에서).
+    wire w_fifo_srst = ~i_rstn | w_dispatch_rst;
     generate
         for (b = 0; b < 4; b = b + 1) begin : gen_fifo_L1
+            // §5: wr_en 을 URAM rd_valid 로 (1clk 후 dout 안착과 동시 push).
+            //     이전 ub_L1_re 직결은 din 이 1clk 늦어 첫 word 가 0 으로 미끄러짐.
             fifo_generator_0 u_fifo_L1 (
                 .clk         (i_clk),
-                .srst        (~i_rstn),
+                .srst        (w_fifo_srst),
                 .din         (uram_L1_dout[b]),
-                .wr_en       (ub_L1_re[b]),
+                .wr_en       (uram_L1_rd_valid[b]),
                 .rd_en       (w_fifo_rd_en),
                 .dout        (fifo_L1_dout[b]),
                 .full        (),
@@ -346,9 +356,9 @@ module top #(
         for (b = 0; b < 2; b = b + 1) begin : gen_fifo_L2
             fifo_generator_0 u_fifo_L2 (
                 .clk         (i_clk),
-                .srst        (~i_rstn),
+                .srst        (w_fifo_srst),
                 .din         (uram_L2_dout[b]),
-                .wr_en       (ub_L2_re[b]),
+                .wr_en       (uram_L2_rd_valid[b]),
                 .rd_en       (w_fifo_rd_en),
                 .dout        (fifo_L2_dout[b]),
                 .full        (),
