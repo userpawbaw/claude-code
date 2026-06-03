@@ -1,5 +1,16 @@
 # INV-001: L1 마지막 8 픽셀/채널이 0 으로 손실
 
+---
+id: INV-001
+project: SRCNN_4_2_1
+caused_by: []
+found_in: [tb_L1.v baseline run]
+fixed_by: [BUG-001]
+tested_by: [REG-001]
+pattern: [PAT-01]
+status: closed
+---
+
 ## Observe (Fact)
 
 `tb_L1` 베이스라인 실행 결과 **31 errors / 90000 pixels, 모두 각 채널의 마지막 8 픽셀 부근에 집중**.

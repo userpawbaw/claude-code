@@ -1,5 +1,14 @@
 # REG-003: tb_out — L3 최종 출력 스트림 vs golden_out (end-to-end)
 
+---
+id: REG-003
+project: SRCNN_4_2_1
+covers: [BUG-001, BUG-002]
+file: srcnn/verification/tb_out.v
+modes: [conv-only, ReLU]
+status: passing
+---
+
 - **Tracks**: BUG-001 / BUG-002 의 L2→L3 layer 경계 변종 + L3 전구간.
 - 또한 **i_start 1펄스 → L1→L2→L3 자동 진행** 의 end-to-end 정합.
 - **Test bench**: `srcnn/verification/tb_out.v`

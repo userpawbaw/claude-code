@@ -1,5 +1,17 @@
 # INV-002: L2 oc1 에서 출력이 정확히 +4 픽셀 시프트
 
+---
+id: INV-002
+project: SRCNN_4_2_1
+caused_by: []
+found_in: [tb_L2.v after C1+C2]
+fixed_by: [BUG-002]
+tested_by: [REG-002]
+pattern: [PAT-06, PAT-04]
+status: closed
+note: HANDOFF.md §3.3/§5 spec 밖의 신규 발견. 사이클 모델이 단일 라운드만 봤음.
+---
+
 ## Observe (Fact)
 
 C1 (INV-001 fix) + C2 (HANDOFF §5 의 URAM `rd_valid` → FIFO `wr_en`) 적용 후 `tb_L2` 실행 결과:

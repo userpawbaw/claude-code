@@ -1,5 +1,14 @@
 # REG-001: tb_L1 — uram_L1[0..3] vs golden_L1
 
+---
+id: REG-001
+project: SRCNN_4_2_1
+covers: [BUG-001]
+file: srcnn/verification/tb_L1.v
+modes: [conv-only, ReLU]
+status: passing
+---
+
 - **Tracks**: BUG-001 (FSM tail loss)
 - **Test bench**: `srcnn/verification/tb_L1.v`
 - **Mode**: conv-only (URELU=0, 기본) / ReLU (URELU=1) 양쪽 모두 통과해야 함.

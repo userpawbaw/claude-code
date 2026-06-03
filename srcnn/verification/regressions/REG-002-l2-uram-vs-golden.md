@@ -1,5 +1,14 @@
 # REG-002: tb_L2 — uram_L2[0..1] vs golden_L2
 
+---
+id: REG-002
+project: SRCNN_4_2_1
+covers: [BUG-001, BUG-002]
+file: srcnn/verification/tb_L2.v
+modes: [conv-only, ReLU]
+status: passing
+---
+
 - **Tracks**: BUG-002 (FIFO leftover cross out_ch).
 - 또한 BUG-001 의 layer 경계 변종을 같이 커버 (L1→L2 전환).
 - **Test bench**: `srcnn/verification/tb_L2.v`

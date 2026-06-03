@@ -1,5 +1,15 @@
 # BUG-002: out_ch 경계에서 FIFO 잔류 4픽셀이 다음 라운드 데이터를 +4 시프트
 
+---
+id: BUG-002
+project: SRCNN_4_2_1
+found_in: [INV-002]
+fixed_in: [8b45917]
+tested_by: [REG-002, REG-003]
+pattern: [PAT-06, PAT-04]
+status: fixed
+---
+
 - **Discovered**: INV-002 (`L2 oc1 출력이 +4 시프트`)
 - **Source file**: `srcnn/rtl/top_multilayer.v` (FIFO 인스턴스 섹션)
 - **Fixed in**: commit `8b45917` (이번 세션 C2)

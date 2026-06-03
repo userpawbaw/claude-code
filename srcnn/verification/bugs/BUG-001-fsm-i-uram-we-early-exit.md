@@ -1,5 +1,15 @@
 # BUG-001: FSM S_DONE 이 첫 wr_pulse 에서 즉시 exit → 마지막 pack write 손실
 
+---
+id: BUG-001
+project: SRCNN_4_2_1
+found_in: [INV-001]
+fixed_in: [20e7845]
+tested_by: [REG-001, REG-002, REG-003]
+pattern: [PAT-01]
+status: fixed
+---
+
 - **Discovered**: INV-001 (`L1 마지막 8 픽셀/채널이 0`)
 - **Source file**: `srcnn/rtl/FSM_pad_line_buff_improved.v`
 - **Fixed in**: commit `20e7845` (이번 세션 C1)
