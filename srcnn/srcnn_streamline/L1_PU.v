@@ -3,37 +3,40 @@
 module L1_PU #(
     parameter OUT_CH       = 8,
     parameter DATA_BIT     = 16,
-    
+
     parameter W_BRAM_WIDTH = 64,   // 16-bit x 4
     parameter W_BRAM_DEPTH = 20,
     parameter WEIGHT_DEPTH = 18
-    
+
 )(
     input  wire                         i_clk,
     input  wire                         i_rstn,
     input  wire                         i_IDLE_rst,
-    
-    // 1. Feature Map Input (From External / L1 Input BRAM)
+
+    // 1. Feature Map Input (from L1_top: post-padding-mux)
     input  wire                         i_input_valid,
-    input  wire [DATA_BIT-1:0]          i_pixel_data, // L1은 단일 채널(16-bit) 입력
-    
-    // 2. Weight & Bias Input (From FSM & Weight BRAM)
-    input  wire                         i_w_rd_en, 
-    input  wire [W_BRAM_WIDTH-1:0]      i_weight_bram_data,  
-    
-    // 3. Final Output (To L1 Output URAM, 128-bit)
+    input  wire [DATA_BIT-1:0]          i_pixel_data,
+
+    // 2. Weight & Bias Input (from L1_local_FSM + Weight BRAM)
+    input  wire                         i_w_rd_en,
+    input  wire [W_BRAM_WIDTH-1:0]      i_weight_bram_data,
+
+    // 3. Final Output (to L1_top → intermid1_2 URAM)
     output reg                          o_pixel_valid,
-    output reg  [(OUT_CH*DATA_BIT)-1:0] o_uram_data
+    output reg  [(OUT_CH*DATA_BIT)-1:0] o_uram_data,
+
+    // 4. Done signal for FSM (drain-aligned)
+    output wire                         o_img_done
 );
 
     // =========================================================================
-    // 1. Weight & Bias Enable Control Logic (L2와 동일한 초경량 디코더)
+    // 1. Weight & Bias Enable Control Logic
     // =========================================================================
     reg [4:0]       weight_addr; // 0~17: Weight, 18~19: Bias
     reg [OUT_CH-1:0] r_weight_group_en;
     reg [8:0]       r_weight_tap_en;
-    
-    reg signed [15:0] r_bias [0:OUT_CH-1]; // 8개의 Bias 레지스터
+
+    reg signed [15:0] r_bias [0:OUT_CH-1];
     integer i;
     always @(posedge i_clk or negedge i_rstn) begin
         if (~i_rstn) begin
@@ -44,13 +47,11 @@ module L1_PU #(
                 r_bias[i] <= 0;
             end
         end else begin
-            if (i_w_rd_en) begin 
+            if (i_w_rd_en) begin
                 if (weight_addr < WEIGHT_DEPTH) begin
-                    // Weight 로딩 구간 (L2와 완벽히 동일)
                     r_weight_group_en <= { {4{weight_addr[0]}} , {4{~weight_addr[0]}} };
-                    r_weight_tap_en   <= 9'b1 << weight_addr[4:1]; 
+                    r_weight_tap_en   <= 9'b1 << weight_addr[4:1];
                 end else begin
-                    // 19/20번째 클럭: Bias 0~3 / 4~7 로딩
                     r_weight_group_en <= 0;
                     r_weight_tap_en   <= 0;
                     for(i=0; i<4; i=i+1) begin
@@ -60,7 +61,6 @@ module L1_PU #(
                 end
                 weight_addr <= weight_addr + 1;
             end else begin
-                // ★ every-cycle clear when not loading (was: guarded by addr==19 which never fired post-load)
                 weight_addr       <= 0;
                 r_weight_group_en <= 0;
                 r_weight_tap_en   <= 0;
@@ -69,13 +69,13 @@ module L1_PU #(
     end
 
     // =========================================================================
-    // 2. 1 Line Buffer & 8 PE Groups Generate (Broadcast 구조)
+    // 2. 1 Line Buffer & 8 PE Groups Generate (Broadcast)
     // =========================================================================
     wire [143:0]       w_line_data;
     wire               w_line_valid;
     wire               w_line_rd_done;
-    
-    // L1은 라인 버퍼가 딝 1개만 필요 (자원 극강 절약)
+    wire               w_img_done;
+
     line_buffer_improved #(
         .IMG_WIDTH(152),
         .WIN_ROW(3),
@@ -84,13 +84,13 @@ module L1_PU #(
     ) u_line_buffer (
         .i_clk          (i_clk),
         .i_rstn         (i_rstn),
-        .i_IDLE_rst     (i_IDLE_rst), 
+        .i_IDLE_rst     (i_IDLE_rst),
         .i_input_valid  (i_input_valid),
-        .i_input_data   (i_pixel_data), 
-        .o_line_data    (w_line_data),  
-        .o_line_valid   (w_line_valid),  
-        .o_line_rd_done (w_line_rd_done),     
-        .o_img_done     ()
+        .i_input_data   (i_pixel_data),
+        .o_line_data    (w_line_data),
+        .o_line_valid   (w_line_valid),
+        .o_line_rd_done (w_line_rd_done),
+        .o_img_done     (w_img_done)
     );
 
     wire               w_pe_valid [0:OUT_CH-1];
@@ -103,19 +103,13 @@ module L1_PU #(
             pe_group pe_inst (
                 .i_clk          (i_clk),
                 .i_rstn         (i_rstn),
-                // 1개의 라인 버퍼 출력을 8개 PE에 Broadcast
                 .i_line_valid   (w_line_valid),
-                .i_line_data    (w_line_data), 
-                
-                // 0-LUT 가중치 정적 인덱싱: out_ch j가 j%4번째 16bit lane을 점유
-                .i_weight       (i_weight_bram_data[16*(j%4) +: 16]), 
-                
-                // ★ 9bit gated tap_en (L2_PU 패턴과 동일)
+                .i_line_data    (w_line_data),
+                .i_weight       (i_weight_bram_data[16*(j%4) +: 16]),
                 .i_w_tap_en     ({9{r_weight_group_en[j]}} & r_weight_tap_en),
                 .i_line_done    (w_line_rd_done),
-                
                 .o_valid        (w_pe_valid[j]),
-                .o_partial      (w_partial[j]), // L1은 이게 최종 Conv 합산값임
+                .o_partial      (w_partial[j]),
                 .o_pe_done      (w_pe_done[j])
             );
         end
@@ -125,20 +119,14 @@ module L1_PU #(
     // 3. Bias Latch, ReLU + Saturation Pipeline & 128-bit Concatenation
     // =========================================================================
     wire [(OUT_CH*DATA_BIT)-1:0] w_final_concat;
-    
+
     generate
         for (j = 0; j < OUT_CH; j = j + 1) begin : gen_relu
-            // partial(21-bit) + bias(16-bit) -> 22-bit
-            wire signed [21:0] w_sum = w_partial[j] + r_bias[j]; 
-            
-            // ReLU + Q8.8 positive saturation
-            //   - w_sum[21]      : sign bit (1 -> negative -> ReLU clamps to 0)
-            //   - |w_sum[20:15]  : positive overflow beyond Q8.8 range -> clip to max
-            //   - else            : valid Q8.8 result, lower 16 bits
-            assign w_final_concat[16*j +: 16] = 
-                (w_sum[21])     ? 16'd0       :  // negative -> ReLU
-                (|w_sum[20:15]) ? 16'h7FFF    :  // positive overflow -> saturate (Q8.8 max)
-                                  w_sum[15:0];   // normal
+            wire signed [21:0] w_sum = w_partial[j] + r_bias[j];
+            assign w_final_concat[16*j +: 16] =
+                (w_sum[21])     ? 16'd0       :
+                (|w_sum[20:15]) ? 16'h7FFF    :
+                                  w_sum[15:0];
         end
     endgenerate
 
@@ -147,9 +135,24 @@ module L1_PU #(
             o_pixel_valid <= 0;
             o_uram_data   <= 0;
         end else begin
-            o_pixel_valid <= w_pe_valid[0]; // 모든 PE 동기화됨
-            o_uram_data   <= w_final_concat; // 128-bit URAM 데이터 한 방에 조립
+            o_pixel_valid <= w_pe_valid[0];
+            o_uram_data   <= w_final_concat;
         end
     end
+
+    // =========================================================================
+    // 4. img_done propagation (drain-aligned for FSM i_adder_done)
+    //    L1 pipeline depth from line_buffer.o_img_done:
+    //      pe_group: 3clk + output register: 1clk = 4clk
+    // =========================================================================
+    delay_shift #(
+        .DELAY(3+1)
+    ) d_l1_img_done (
+        .clk(i_clk),
+        .rst(~i_rstn),
+        .en (1'b1),
+        .din(w_img_done),
+        .dout(o_img_done)
+    );
 
 endmodule
