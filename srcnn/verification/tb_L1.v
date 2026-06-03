@@ -1,11 +1,12 @@
 `timescale 1ns / 1ps
 // tb_L1.v — Layer1 검증: uram_L1[0..3] 출력 vs golden_L1
 module tb_L1;
+    parameter URELU = 0;   // -PtbL1.URELU=1 로 ReLU 모드 검증
     reg clk=0, rstn=0, start=0;
     wire done, ovalid, lrd;
     wire [63:0] oout;
 
-    top #(.USE_RELU(0)) dut (
+    top #(.USE_RELU(URELU)) dut (
         .i_clk(clk), .i_rstn(rstn), .i_start(start),
         .o_done(done), .o_output_valid(ovalid),
         .o_output(oout), .o_line_rd_done(lrd)

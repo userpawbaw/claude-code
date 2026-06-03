@@ -3,9 +3,10 @@
 //   L3 결과는 URAM 에 저장되지 않고 64b 4픽셀 패킹으로 포트로 흘러나간다.
 //   o_output_valid (= ub_final_we) 펄스마다 4픽셀씩 캡처해서 golden_out.txt 와 대조.
 module tb_out;
+    parameter URELU = 0;   // -Ptb_out.URELU=1 로 ReLU 모드 검증
     reg clk=0, rstn=0, start=0;
     wire done, ovalid, lrd; wire [63:0] oout;
-    top #(.USE_RELU(0)) dut (
+    top #(.USE_RELU(URELU)) dut (
         .i_clk(clk), .i_rstn(rstn), .i_start(start),
         .o_done(done), .o_output_valid(ovalid),
         .o_output(oout), .o_line_rd_done(lrd)
