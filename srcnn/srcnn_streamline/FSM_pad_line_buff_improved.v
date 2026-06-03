@@ -69,19 +69,19 @@ wire w_pad_area;
 wire w_valid_pad_area;
 
 // 레이어별 파라미터 LUT (streamline: L2 고정값)
-reg [2:0]  lut_out_ch;
-reg [4:0]  lut_w_words;     // ★ widened to 5-bit
+reg [2:0]                lut_out_ch;
+reg [4:0]                lut_w_words;     // ★ widened to 5-bit
 reg [MEM_ADDR_WIDTH-1:0] lut_w_base;
-reg [1:0]  lut_sub_max;
-reg [1:0]  lut_oc_stride;
-reg [1:0]  lut_word_stride;
+reg [1:0]                lut_sub_max;
+reg [MEM_ADDR_WIDTH-1:0] lut_oc_stride;   // ★ widened (was [1:0], must hold 19)
+reg [1:0]                lut_word_stride;
 
 always @(*) begin
     // L2 fixed: 8 in_ch -> 4 out_ch
     lut_out_ch      = 3'd4;
-    lut_w_words     = 5'd19;   // ★ 18 weight + 1 bias = 19
+    lut_w_words     = 5'd19;   // 18 weight + 1 bias = 19
     lut_sub_max     = 2'd1;
-    lut_oc_stride   = 0;
+    lut_oc_stride   = 'd19;    // ★ 18 weight + 1 bias per out_ch
     lut_word_stride = 2'd1;
 end
 
