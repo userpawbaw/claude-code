@@ -3,8 +3,8 @@
 // stubs.v — 검증용 보조 모듈 (사용자 환경의 실제 IP/모듈 대체)
 //   - PE                  : 곱셈 PE (1clk 곱, weight 래치)
 //   - simple_dual_port_bram : 단순 동기 read BRAM (1clk rd_valid)
-//   - simple_dual_port_uram : 단순 동기 read URAM (1clk rd 지연)
-//   - fifo_generator_0    : 64bit din -> 16bit dout (4분할) FIFO 흉내
+//   - simple_dual_port_uram : 단순 동기 read URAM (1clk rd 지연, addr [15:0])
+//   - fifo_generator_0    : 64bit din -> 16bit dout (4분할) FIFO 표내
 // 주: 기능 검증용. 실제 합성은 사용자 환경 IP 사용.
 // =============================================================================
 
@@ -48,6 +48,7 @@ endmodule
 
 // -----------------------------------------------------------------------------
 // simple_dual_port_bram : 동기 read, 1clk 후 rd_valid + rd_dout
+//   addr [14:0] (15-bit) - existing convention
 // -----------------------------------------------------------------------------
 module simple_dual_port_bram #(
     parameter WIDTH     = 16,
@@ -79,6 +80,7 @@ endmodule
 
 // -----------------------------------------------------------------------------
 // simple_dual_port_uram : 동기 read, 1clk 후 rd_dout (+rd_valid)
+//   addr [15:0] (16-bit) - widened for streamline intermid URAMs (depth ~45000)
 // -----------------------------------------------------------------------------
 module simple_dual_port_uram #(
     parameter WIDTH     = 64,
@@ -87,10 +89,10 @@ module simple_dual_port_uram #(
 )(
     input  wire                     clk,
     input  wire                     wr_en,
-    input  wire [12:0]              wr_addr,
+    input  wire [15:0]              wr_addr,
     input  wire [WIDTH-1:0]         wr_din,
     input  wire                     rd_en,
-    input  wire [12:0]              rd_addr,
+    input  wire [15:0]              rd_addr,
     output reg                      rd_valid,
     output reg  [WIDTH-1:0]         rd_dout
 );

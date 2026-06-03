@@ -23,7 +23,7 @@ module L3_PU #(
     //   addr 1: w01 w11 w21 w31   (tap 1)
     //   ...
     //   addr 8: w08 w18 w28 w38   (tap 8)
-    //   addr 9: b00 0000 0000 0000 (out_ch0 bias, zero packing)
+    //   addr 9: b000 0000 0000 0000 (out_ch0 bias, zero packing, MSB 위치)
     // -> 10 word/iter, out_ch=1이므로 iter 단 1회 (시분할 없음)
     input  wire                          i_w_rd_en,
     input  wire [W_BRAM_WIDTH-1:0]       i_weight_bram_data,
@@ -141,6 +141,7 @@ module L3_PU #(
     // --------------------------------------------------------
     // [4] Bias Latch & Saturation Truncate (no ReLU)
     // --------------------------------------------------------
+    // bias 위치: L2_PU와 동일하게 MSB 16bit (i_weight_bram_data[63 -: DATA_BIT])
     // sum -> Q8.8 window {sign[31], [22:8]} 추출. 양/음 양쪽 오버플로우 sat.
     reg signed [15:0] r_bias;
     reg signed [31:0] r_final_sum;
@@ -152,7 +153,7 @@ module L3_PU #(
             o_pixel_valid <= 0;
             o_pixel_data  <= 0;
         end else begin
-            if (i_bias_en) r_bias <= i_weight_bram_data[DATA_BIT-1:0]; // bias word 가장 하위 [15:0]
+            if (i_bias_en) r_bias <= i_weight_bram_data[63 -: DATA_BIT];
 
             r_final_sum   <= r_add_stage2 + r_bias;
             r_final_valid <= r_valid_stage2;
