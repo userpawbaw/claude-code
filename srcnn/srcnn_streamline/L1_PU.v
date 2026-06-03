@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 
-module PU_L1 #(
+module L1_PU #(
     parameter OUT_CH       = 8,
     parameter DATA_BIT     = 16,
     
@@ -41,7 +41,7 @@ module PU_L1 #(
             r_weight_group_en <= 0;
             r_weight_tap_en   <= 0;
             for(i = 0; i<OUT_CH; i=i+1) begin
-                r_bias[i] = 0;
+                r_bias[i] <= 0;
             end
         end else begin
             if (i_w_rd_en) begin 
@@ -49,16 +49,18 @@ module PU_L1 #(
                     // Weight 로딩 구간 (L2와 완벽히 동일)
                     r_weight_group_en <= { {4{weight_addr[0]}} , {4{~weight_addr[0]}} };
                     r_weight_tap_en   <= 9'b1 << weight_addr[4:1]; 
-                end else if (weight_addr >= WEIGHT_DEPTH) begin
-                    // 19번째 클럭: Bias 0~3 로딩
-                    r_weight_group_en <= 0; r_weight_tap_en <= 0;
+                end else begin
+                    // 19/20번째 클럭: Bias 0~3 / 4~7 로딩
+                    r_weight_group_en <= 0;
+                    r_weight_tap_en   <= 0;
                     for(i=0; i<4; i=i+1) begin
                         // 18: 0~3, 19: 4~7
-                        r_bias[ {weight_addr[0], i[1:0]} ] = i_weight_bram_data[DATA_BIT*i +:DATA_BIT];
+                        r_bias[ {weight_addr[0], i[1:0]} ] <= i_weight_bram_data[DATA_BIT*i +:DATA_BIT];
                     end
                 end
                 weight_addr <= weight_addr + 1;
-            end else if(weight_addr == W_BRAM_DEPTH-1)  begin
+            end else begin
+                // ★ every-cycle clear when not loading (was: guarded by addr==19 which never fired post-load)
                 weight_addr       <= 0;
                 r_weight_group_en <= 0;
                 r_weight_tap_en   <= 0;
@@ -73,7 +75,7 @@ module PU_L1 #(
     wire               w_line_valid;
     wire               w_line_rd_done;
     
-    // L1은 라인 버퍼가 딱 1개만 필요합니다. (자원 극강 절약)
+    // L1은 라인 버퍼가 딝 1개만 필요 (자원 극강 절약)
     line_buffer_improved #(
         .IMG_WIDTH(152),
         .WIN_ROW(3),
@@ -98,20 +100,18 @@ module PU_L1 #(
     genvar j;
     generate
         for (j = 0; j < OUT_CH; j = j + 1) begin : gen_pe_groups
-            pe_group_changed #(
-                .IN_CN(1) // 내부적으로 쓰이진 않지만 파라미터 매칭
-            ) pe_inst (
+            pe_group pe_inst (
                 .i_clk          (i_clk),
                 .i_rstn         (i_rstn),
                 // 1개의 라인 버퍼 출력을 8개 PE에 Broadcast
                 .i_line_valid   (w_line_valid),
                 .i_line_data    (w_line_data), 
                 
-                // 0-LUT 가중치 정적 인덱싱
+                // 0-LUT 가중치 정적 인덱싱: out_ch j가 j%4번째 16bit lane을 점유
                 .i_weight       (i_weight_bram_data[16*(j%4) +: 16]), 
                 
-                .i_w_group_en   (r_weight_group_en[j]),
-                .i_w_tap_en     (r_weight_tap_en),
+                // ★ 9bit gated tap_en (L2_PU 패턴과 동일)
+                .i_w_tap_en     ({9{r_weight_group_en[j]}} & r_weight_tap_en),
                 .i_line_done    (w_line_rd_done),
                 
                 .o_valid        (w_pe_valid[j]),
@@ -122,7 +122,7 @@ module PU_L1 #(
     endgenerate
 
     // =========================================================================
-    // 3. Bias Latch, ReLU Pipeline & 128-bit Concatenation (Adder Tree 없음!)
+    // 3. Bias Latch, ReLU + Saturation Pipeline & 128-bit Concatenation
     // =========================================================================
     wire [(OUT_CH*DATA_BIT)-1:0] w_final_concat;
     
@@ -131,8 +131,14 @@ module PU_L1 #(
             // partial(21-bit) + bias(16-bit) -> 22-bit
             wire signed [21:0] w_sum = w_partial[j] + r_bias[j]; 
             
-            // MSB가 1이면 음수(0으로 클리핑), 아니면 하위 16비트 출력
-            assign w_final_concat[16*j +: 16] = (w_sum[21]) ? 16'd0 : w_sum[15:0];
+            // ReLU + Q8.8 positive saturation
+            //   - w_sum[21]      : sign bit (1 -> negative -> ReLU clamps to 0)
+            //   - |w_sum[20:15]  : positive overflow beyond Q8.8 range -> clip to max
+            //   - else            : valid Q8.8 result, lower 16 bits
+            assign w_final_concat[16*j +: 16] = 
+                (w_sum[21])     ? 16'd0       :  // negative -> ReLU
+                (|w_sum[20:15]) ? 16'h7FFF    :  // positive overflow -> saturate (Q8.8 max)
+                                  w_sum[15:0];   // normal
         end
     endgenerate
 
