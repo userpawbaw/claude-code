@@ -13,11 +13,11 @@ module PU_L1 #(
     input  wire                         i_rstn,
     input  wire                         i_IDLE_rst,
     
-    // 1. Feature Map Input (From External / L1 Input BRAM)
+    // input 
     input  wire                         i_input_valid,
-    input  wire [DATA_BIT-1:0]          i_pixel_data, // L1은 단일 채널(16-bit) 입력
+    input  wire [DATA_BIT-1:0]          i_pixel_data, // L1은 단일 채널(16bit) 입력
     
-    // 2. Weight & Bias Input (From FSM & Weight BRAM)
+    // 2. Weight & Bias en & data
     input  wire                         i_w_rd_en, 
     input  wire [W_BRAM_WIDTH-1:0]      i_weight_bram_data,  
     
@@ -46,7 +46,7 @@ module PU_L1 #(
         end else begin
             if (i_w_rd_en) begin 
                 if (weight_addr < WEIGHT_DEPTH) begin
-                    // Weight 로딩 구간 (L2와 완벽히 동일)
+                    // Weight 로딩 구간 
                     r_weight_group_en <= { {4{weight_addr[0]}} , {4{~weight_addr[0]}} };
                     r_weight_tap_en   <= 9'b1 << weight_addr[4:1]; 
                 end else if (weight_addr >= WEIGHT_DEPTH) begin
@@ -58,7 +58,7 @@ module PU_L1 #(
                     end
                 end
                 weight_addr <= weight_addr + 1;
-            end else if(weight_addr == W_BRAM_DEPTH-1)  begin
+            end else if(weight_addr == W_BRAM_DEPTH-1)  begin // 꺼지면 초기화
                 weight_addr       <= 0;
                 r_weight_group_en <= 0;
                 r_weight_tap_en   <= 0;
@@ -73,7 +73,7 @@ module PU_L1 #(
     wire               w_line_valid;
     wire               w_line_rd_done;
     
-    // L1은 라인 버퍼가 딱 1개만 필요합니다. (자원 극강 절약)
+    // L1: in_Ch 1개 (Line buffer LUT 최적화해서 병렬처리해도 부담 낮긴 함)
     line_buffer_improved #(
         .IMG_WIDTH(152),
         .WIN_ROW(3),
@@ -99,11 +99,11 @@ module PU_L1 #(
     generate
         for (j = 0; j < OUT_CH; j = j + 1) begin : gen_pe_groups
             pe_group_changed #(
-                .IN_CN(1) // 내부적으로 쓰이진 않지만 파라미터 매칭
+                .IN_CN(1) // L2 방식에 매칭
             ) pe_inst (
                 .i_clk          (i_clk),
                 .i_rstn         (i_rstn),
-                // 1개의 라인 버퍼 출력을 8개 PE에 Broadcast
+                // 라인버퍼 data는 out_Ch 8개 PE group 공통
                 .i_line_valid   (w_line_valid),
                 .i_line_data    (w_line_data), 
                 
@@ -115,24 +115,23 @@ module PU_L1 #(
                 .i_line_done    (w_line_rd_done),
                 
                 .o_valid        (w_pe_valid[j]),
-                .o_partial      (w_partial[j]), // L1은 이게 최종 Conv 합산값임
+                .o_partial      (w_partial[j]), // L1은 이게 최종 Conv 합산값임(추가 adder_tree 필요 x)
                 .o_pe_done      (w_pe_done[j])
             );
         end
     endgenerate
 
     // =========================================================================
-    // 3. Bias Latch, ReLU Pipeline & 128-bit Concatenation (Adder Tree 없음!)
+    // 3. Bias & ReLU
     // =========================================================================
     wire [(OUT_CH*DATA_BIT)-1:0] w_final_concat;
     
     generate
         for (j = 0; j < OUT_CH; j = j + 1) begin : gen_relu
-            // partial(21-bit) + bias(16-bit) -> 22-bit
             wire signed [21:0] w_sum = w_partial[j] + r_bias[j]; 
             
-            // MSB가 1이면 음수(0으로 클리핑), 아니면 하위 16비트 출력
-            assign w_final_concat[16*j +: 16] = (w_sum[21]) ? 16'd0 : w_sum[15:0];
+            //ReLU or clipping 
+            assign w_final_concat[16*j +: 16] = (w_sum[21]) ? 16'd0 : w_sum[15:0]; // 128bit(URAM port width*2) 에 대해 동일 위치의 out_CH 픽셀 packing. (LSB부터 16개씩)
         end
     endgenerate
 
@@ -141,8 +140,8 @@ module PU_L1 #(
             o_pixel_valid <= 0;
             o_uram_data   <= 0;
         end else begin
-            o_pixel_valid <= w_pe_valid[0]; // 모든 PE 동기화됨
-            o_uram_data   <= w_final_concat; // 128-bit URAM 데이터 한 방에 조립
+            o_pixel_valid <= w_pe_valid[0]; // 모든 PE valid 신호 동일
+            o_uram_data   <= w_final_concat;
         end
     end
 
