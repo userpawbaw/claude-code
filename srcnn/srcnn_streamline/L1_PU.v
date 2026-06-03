@@ -12,16 +12,16 @@ module L1_PU #(
     input  wire                         i_clk,
     input  wire                         i_rstn,
     input  wire                         i_IDLE_rst,
-
-    // 1. Feature Map Input (from L1_top: post-padding-mux)
+    
+    // input 
     input  wire                         i_input_valid,
-    input  wire [DATA_BIT-1:0]          i_pixel_data,
-
-    // 2. Weight & Bias Input (from L1_local_FSM + Weight BRAM)
-    input  wire                         i_w_rd_en,
-    input  wire [W_BRAM_WIDTH-1:0]      i_weight_bram_data,
-
-    // 3. Final Output (to L1_top → intermid1_2 URAM)
+    input  wire [DATA_BIT-1:0]          i_pixel_data, // L1은 단일 채널(16bit) 입력
+    
+    // 2. Weight & Bias en & data
+    input  wire                         i_w_rd_en, 
+    input  wire [W_BRAM_WIDTH-1:0]      i_weight_bram_data,  
+    
+    // 3. Final Output (To L1 Output URAM, 128-bit)
     output reg                          o_pixel_valid,
     output reg  [(OUT_CH*DATA_BIT)-1:0] o_uram_data,
 
@@ -76,6 +76,8 @@ module L1_PU #(
     wire               w_line_rd_done;
     wire               w_img_done;
 
+    
+    // L1: in_Ch 1개 (Line buffer LUT 최적화해서 병렬처리해도 부담 낮긴 함)
     line_buffer_improved #(
         .IMG_WIDTH(152),
         .WIN_ROW(3),
@@ -100,23 +102,26 @@ module L1_PU #(
     genvar j;
     generate
         for (j = 0; j < OUT_CH; j = j + 1) begin : gen_pe_groups
-            pe_group pe_inst (
+            pe_group_changed #(
+                .IN_CN(1) // L2 방식에 매칭
+            ) pe_inst (
                 .i_clk          (i_clk),
                 .i_rstn         (i_rstn),
+                // 라인버퍼 data는 out_Ch 8개 PE group 공통
                 .i_line_valid   (w_line_valid),
                 .i_line_data    (w_line_data),
                 .i_weight       (i_weight_bram_data[16*(j%4) +: 16]),
                 .i_w_tap_en     ({9{r_weight_group_en[j]}} & r_weight_tap_en),
                 .i_line_done    (w_line_rd_done),
                 .o_valid        (w_pe_valid[j]),
-                .o_partial      (w_partial[j]),
+                .o_partial      (w_partial[j]), // L1은 이게 최종 Conv 합산값임(추가 adder_tree 필요 x)
                 .o_pe_done      (w_pe_done[j])
             );
         end
     endgenerate
 
     // =========================================================================
-    // 3. Bias Latch, ReLU + Saturation Pipeline & 128-bit Concatenation
+    // 3. Bias & ReLU
     // =========================================================================
     wire [(OUT_CH*DATA_BIT)-1:0] w_final_concat;
 
@@ -135,7 +140,7 @@ module L1_PU #(
             o_pixel_valid <= 0;
             o_uram_data   <= 0;
         end else begin
-            o_pixel_valid <= w_pe_valid[0];
+            o_pixel_valid <= w_pe_valid[0]; // 모든 PE valid 신호 동일
             o_uram_data   <= w_final_concat;
         end
     end

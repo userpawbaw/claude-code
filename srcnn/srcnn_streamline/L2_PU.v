@@ -53,8 +53,8 @@ module L2_PU #(
     //   - i_w_rd_en이 유지되는 동안 구간 카운터로 PE 슬롯 제어
     // =========================================================================
     reg [5:0]       weight_addr;
-    reg [IN_CH-1:0] r_weight_group_en;
-    reg [8:0]       r_weight_tap_en;
+    reg [IN_CH-1:0] r_weight_group_en;    // PE group en 
+    reg [8:0]       r_weight_tap_en; // one hot en for tap (each pe)
 
     always @(posedge i_clk or negedge i_rstn) begin
         if (~i_rstn) begin
@@ -64,8 +64,8 @@ module L2_PU #(
         end else begin
             if (i_w_rd_en) begin
                 weight_addr         <= weight_addr + 1;
-                r_weight_group_en   <= { {4{weight_addr[0]}} , {4{~weight_addr[0]}} };
-                r_weight_tap_en     <= weight_addr[0] ? (r_weight_tap_en << 1) : r_weight_tap_en;
+                r_weight_group_en   <= { {4{weight_addr[0]}} , {4{~weight_addr[0]}} };    // clk:weight_data(W_In_Out_Tap) ->  0: w000 w100 w200 w300, 1: w400 w500 w600 w700, 2: w001 w101 w201 w301  
+                r_weight_tap_en     <= weight_addr[0] ? (r_weight_tap_en << 1) : r_weight_tap_en;        // i_w_rd_en이 18clk동안 켜질 때 2clk마다 << 1 (one hot)해서 tap 맞춤
             end else begin
                 weight_addr         <= 0;
                 r_weight_group_en   <= 0;
@@ -77,7 +77,7 @@ module L2_PU #(
     genvar i;
     generate
         for (i = 0; i < IN_CH; i = i + 1) begin : gen_ch
-            // padding mux per channel (패딩 영역에서 채널별로 zero 주입)
+            // padding mux per ch (1ch top 방식)
             wire signed [15:0] w_lb_data;
             wire               w_lb_valid;
             assign w_lb_data  = i_is_pad_valid ? 16'h0 : i_uram_data[16*i +: 16];
