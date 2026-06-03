@@ -2,9 +2,9 @@
 # gen_inputs_simple.py
 #  L1 검증용 최소 입력 생성:
 #    - input_l1.txt : 150x150 ramp (X[r][c] = r*150 + c, 15-bit positive)
-//    - weight_l1.txt: identity kernel (tap 4 = 1, 나머지 0). bias 0. 8 out_ch 전부 동일.
-//  예상 L1 출력: 모든 out_ch에 대해 입력 값 그대로 패스스루 (identity conv)
-//  intermid1_2 URAM[i] = {8개 동일 픽셀 값의 packed} = 8 copies of X[i] in 128-bit
+#    - weight_l1.txt: identity kernel (tap 4 = 1, 나머지 0). bias 0. 8 out_ch 전부 동일.
+#  예상 L1 출력: 모든 out_ch에 대해 입력 값 그대로 패스스루 (identity conv)
+#  intermid1_2 URAM[i] = {8개 동일 픽셀 값의 packed} = 8 copies of X[i] in 128-bit
 
 import sys
 
@@ -25,7 +25,7 @@ with open("input_l1.txt", "w") as f:
 # Tap 4 = center -> weight 1, 나머지 0. bias all 0.
 #
 # hex string format (16 chars per line, MSB-first display):
-//   "MMMM IIII JJJJ KKKK"  where MMMM = slot[3] (bits[63:48]), KKKK = slot[0] (bits[15:0])
+#   "MMMM IIII JJJJ KKKK"  where MMMM = slot[3] (bits[63:48]), KKKK = slot[0] (bits[15:0])
 def pack_word(slots_lsb_first):
     """slots_lsb_first[0] -> bits[15:0], slots_lsb_first[3] -> bits[63:48].
     Return 16-hex string (MSB-first display)."""
