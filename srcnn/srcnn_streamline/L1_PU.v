@@ -31,39 +31,32 @@ module L1_PU #(
 
     // =========================================================================
     // 1. Weight & Bias Enable Control Logic
+    //   - 기존 registered group_en/tap_en은 첫 cycle을 놓치고 모든 capture가 1 cycle late되는 버그가 있어서
+    //     combinational decode 방식으로 수정 (weight_addr가 현재 bus mem[weight_addr]과 일치)
     // =========================================================================
-    reg [4:0]       weight_addr; // 0~17: Weight, 18~19: Bias
-    reg [OUT_CH-1:0] r_weight_group_en;
-    reg [8:0]       r_weight_tap_en;
+    reg [4:0]       weight_addr;
+    always @(posedge i_clk or negedge i_rstn) begin
+        if (~i_rstn)        weight_addr <= 0;
+        else if (i_w_rd_en) weight_addr <= weight_addr + 1;
+        else                weight_addr <= 0;
+    end
 
+    // weight phase(0~17): PE capture / bias phase(18~19): no PE capture, r_bias latch
+    wire is_w_phase = i_w_rd_en && (weight_addr < WEIGHT_DEPTH);
+    wire [OUT_CH-1:0] w_weight_group_en =
+        is_w_phase ? { {4{weight_addr[0]}}, {4{~weight_addr[0]}} } : {OUT_CH{1'b0}};
+    wire [8:0]        w_weight_tap_en   =
+        is_w_phase ? (9'b1 << weight_addr[4:1]) : 9'd0;
+
+    // Bias load: weight_addr 18 -> oc 0~3, 19 -> oc 4~7
     reg signed [15:0] r_bias [0:OUT_CH-1];
     integer i;
     always @(posedge i_clk or negedge i_rstn) begin
         if (~i_rstn) begin
-            weight_addr       <= 0;
-            r_weight_group_en <= 0;
-            r_weight_tap_en   <= 0;
-            for(i = 0; i<OUT_CH; i=i+1) begin
-                r_bias[i] <= 0;
-            end
-        end else begin
-            if (i_w_rd_en) begin
-                if (weight_addr < WEIGHT_DEPTH) begin
-                    r_weight_group_en <= { {4{weight_addr[0]}} , {4{~weight_addr[0]}} };
-                    r_weight_tap_en   <= 9'b1 << weight_addr[4:1];
-                end else begin
-                    r_weight_group_en <= 0;
-                    r_weight_tap_en   <= 0;
-                    for(i=0; i<4; i=i+1) begin
-                        // 18: 0~3, 19: 4~7
-                        r_bias[ {weight_addr[0], i[1:0]} ] <= i_weight_bram_data[DATA_BIT*i +:DATA_BIT];
-                    end
-                end
-                weight_addr <= weight_addr + 1;
-            end else begin
-                weight_addr       <= 0;
-                r_weight_group_en <= 0;
-                r_weight_tap_en   <= 0;
+            for(i = 0; i<OUT_CH; i=i+1) r_bias[i] <= 0;
+        end else if (i_w_rd_en && (weight_addr >= WEIGHT_DEPTH)) begin
+            for(i=0; i<4; i=i+1) begin
+                r_bias[ {weight_addr[0], i[1:0]} ] <= i_weight_bram_data[DATA_BIT*i +:DATA_BIT];
             end
         end
     end
@@ -76,7 +69,6 @@ module L1_PU #(
     wire               w_line_rd_done;
     wire               w_img_done;
 
-    
     // L1: in_Ch 1개 (Line buffer LUT 최적화해서 병렬처리해도 부담 낮긴 함)
     line_buffer_improved #(
         .IMG_WIDTH(152),
@@ -102,7 +94,7 @@ module L1_PU #(
     genvar j;
     generate
         for (j = 0; j < OUT_CH; j = j + 1) begin : gen_pe_groups
-            pe_group_changed #(
+            pe_group #(
                 .IN_CN(1) // L2 방식에 매칭
             ) pe_inst (
                 .i_clk          (i_clk),
@@ -111,7 +103,7 @@ module L1_PU #(
                 .i_line_valid   (w_line_valid),
                 .i_line_data    (w_line_data),
                 .i_weight       (i_weight_bram_data[16*(j%4) +: 16]),
-                .i_w_tap_en     ({9{r_weight_group_en[j]}} & r_weight_tap_en),
+                .i_w_tap_en     ({9{w_weight_group_en[j]}} & w_weight_tap_en),
                 .i_line_done    (w_line_rd_done),
                 .o_valid        (w_pe_valid[j]),
                 .o_partial      (w_partial[j]), // L1은 이게 최종 Conv 합산값임(추가 adder_tree 필요 x)

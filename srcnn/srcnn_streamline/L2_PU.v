@@ -1,14 +1,5 @@
 `timescale 1ns / 1ps
 
-// -----------------------------------------------------------------------------
-// L2 PU (refactored)
-//   - FSM_pad 인스턴스 제거 (이제 L2_top이 instantiate)
-//   - i_is_pad_valid를 외부에서 받아 내부 padding mux 구동
-//   - o_line_rd_done, o_pe_done을 FSM으로 전달하기 위해 노출
-//   - bias latch: 외부 i_bias_en 사용 (FSM의 o_bias_en 출력)
-//   - ReLU saturation: 16'h7FFF 적용 (이전 16'h8FFF은 2's complement으로 음수이므로 수정)
-// -----------------------------------------------------------------------------
-
 module L2_PU #(
     parameter IN_CH        = 8,
     parameter W_PIXEL_NUM  = 4,
@@ -50,29 +41,24 @@ module L2_PU #(
 
     // =========================================================================
     // Weight Address Generation
-    //   - i_w_rd_en이 유지되는 동안 구간 카운터로 PE 슬롯 제어
+    //   - 기존 registered group_en/tap_en은 첫 cycle을 놓치고 capture가 1 cycle late되는 버그 있어서
+    //     combinational decode로 수정 (weight_addr가 현재 bus mem[weight_addr]과 일치)
+    //   - clk:weight_data(W_In_Out_Tap) -> 0: w000 w100 w200 w300, 1: w400 w500 w600 w700, 2: w001 w101 w201 w301
+    //   - i_w_rd_en이 18clk동안 켜질 때 2clk마다 tap 시프트
     // =========================================================================
     reg [5:0]       weight_addr;
-    reg [IN_CH-1:0] r_weight_group_en;    // PE group en 
-    reg [8:0]       r_weight_tap_en; // one hot en for tap (each pe)
-
     always @(posedge i_clk or negedge i_rstn) begin
-        if (~i_rstn) begin
-            weight_addr         <= 0;
-            r_weight_group_en   <= 0;
-            r_weight_tap_en     <= 9'b1;
-        end else begin
-            if (i_w_rd_en) begin
-                weight_addr         <= weight_addr + 1;
-                r_weight_group_en   <= { {4{weight_addr[0]}} , {4{~weight_addr[0]}} };    // clk:weight_data(W_In_Out_Tap) ->  0: w000 w100 w200 w300, 1: w400 w500 w600 w700, 2: w001 w101 w201 w301  
-                r_weight_tap_en     <= weight_addr[0] ? (r_weight_tap_en << 1) : r_weight_tap_en;        // i_w_rd_en이 18clk동안 켜질 때 2clk마다 << 1 (one hot)해서 tap 맞춤
-            end else begin
-                weight_addr         <= 0;
-                r_weight_group_en   <= 0;
-                r_weight_tap_en     <= 9'b1;
-            end
-        end
+        if (~i_rstn)        weight_addr <= 0;
+        else if (i_w_rd_en) weight_addr <= weight_addr + 1;
+        else                weight_addr <= 0;
     end
+
+    // L2: weight_addr 0~17 = weight, 18 = bias word
+    // bias word에서는 tap_en 자연 0 (9bit << 9 overflow) → PE no capture
+    wire [IN_CH-1:0] w_weight_group_en =
+        i_w_rd_en ? { {4{weight_addr[0]}}, {4{~weight_addr[0]}} } : {IN_CH{1'b0}};
+    wire [8:0]       w_weight_tap_en   =
+        i_w_rd_en ? (9'b1 << weight_addr[4:1]) : 9'd0;
 
     genvar i;
     generate
@@ -106,7 +92,7 @@ module L2_PU #(
                 .i_line_valid   (w_line_valid[i]),
                 .i_line_data    (w_line_data[i]),
                 .i_weight       (i_weight_bram_data[16*(i[1:0]) +: 16]),
-                .i_w_tap_en     ({9{r_weight_group_en[i]}} & r_weight_tap_en),
+                .i_w_tap_en     ({9{w_weight_group_en[i]}} & w_weight_tap_en),
                 .i_line_done    (w_line_rd_done),
                 .o_valid        (w_pe_valid[i]),
                 .o_partial      (w_partial[i]),
@@ -162,7 +148,7 @@ module L2_PU #(
 
             o_pixel_valid <= r_final_valid;
 
-            // ReLU + Q8.8 saturation (이전 16'h8FFF 좌측 타임 → 16'h7FFF로 수정)
+            // ReLU + Q8.8 saturation
             if (r_final_sum[31]) begin
                 o_pixel_data <= 16'd0;
             end else begin
