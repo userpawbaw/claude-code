@@ -11,7 +11,8 @@
 // -----------------------------------------------------------------------------
 // PE : 실제 PE.v 동작 모사.
 //   weight stationary (i_en_w 래치). DSP = 1clk latency 곱셈기 (mreg only).
-//   o_output = o_valid ? {w_output[31], w_output[14:0]} : 0
+//   o_output = o_valid ? {w_output[31], w_output[22:8]} : 0
+//     - 32-bit 곱(Q16.16) 에서 Q7.8(15bit) + 부호 1bit 추출 (PE.v 와 동치).
 //   o_valid <= i_en_i (1clk). w_output <= i_input * r_weight (1clk, CE=i_en_i).
 // -----------------------------------------------------------------------------
 module PE (
@@ -28,7 +29,7 @@ module PE (
     reg  signed [31:0] w_output;   // DSP P (mreg, 1clk)
     reg                clr;
 
-    assign o_output = o_valid ? {w_output[31], w_output[14:0]} : 16'sd0;
+    assign o_output = o_valid ? {w_output[31], w_output[22:8]} : 16'sd0;
 
     always @(posedge i_clk or negedge i_rstn) begin
         if (~i_rstn) begin
