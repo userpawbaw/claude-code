@@ -44,7 +44,7 @@ module FSM_pad #(
     output reg                          o_line_shift_en,
     output reg                          o_done,
 
-    // ★ exposed for L2_top: which out_ch's pixel is currently being produced
+    // exposed for L2_top: 현재 처리중 out_ch index
     output wire [1:0]                   o_out_ch_cnt
 );
 
@@ -74,21 +74,14 @@ wire w_valid_pad_area;
 assign o_out_ch_cnt = out_ch_cnt;
 
 // 레이어별 파라미터 LUT (L2 고정값)
-reg [2:0]                lut_out_ch;
-reg [4:0]                lut_w_words;
-reg [MEM_ADDR_WIDTH-1:0] lut_w_base;
-reg [1:0]                lut_sub_max;
-reg [MEM_ADDR_WIDTH-1:0] lut_oc_stride;
-reg [1:0]                lut_word_stride;
-
-always @(*) begin
-    // L2 fixed: 8 in_ch -> 4 out_ch
-    lut_out_ch      = 3'd4;
-    lut_w_words     = 5'd19;
-    lut_sub_max     = 2'd1;
-    lut_oc_stride   = 'd19;
-    lut_word_stride = 2'd1;
-end
+// reg + always @(*) 형태는 sensitivity 0이라 sim에서 동작 안 함 (FSM stuck in S_W_READ).
+// 합성에서도 어차피 상수로 떨어지므로 localparam이 명확.
+localparam [2:0]                lut_out_ch      = 3'd4;
+localparam [4:0]                lut_w_words     = 5'd19;
+localparam [MEM_ADDR_WIDTH-1:0] lut_w_base      = 'd0;
+localparam [1:0]                lut_sub_max     = 2'd1;
+localparam [MEM_ADDR_WIDTH-1:0] lut_oc_stride   = 'd19;
+localparam [1:0]                lut_word_stride = 2'd1;
 
 assign w_pad_area = (
         (r_pad_row == 0)          ||
