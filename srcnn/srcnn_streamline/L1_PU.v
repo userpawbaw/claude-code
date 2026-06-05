@@ -92,46 +92,56 @@ module PU_L1 #(
     );
 
     wire               w_pe_valid [0:OUT_CH-1];
-    wire signed [20:0] w_partial [0:OUT_CH-1];
+    wire signed [35:0] w_partial [0:OUT_CH-1];   // ★ Q16.16 (36-bit)
     wire [OUT_CH-1:0]  w_pe_done;
 
     genvar j;
     generate
         for (j = 0; j < OUT_CH; j = j + 1) begin : gen_pe_groups
-            pe_group_changed #(
-                .IN_CN(1) // L2 방식에 매칭
+            // pe_group (file: pe_group_changed.v) — module name fix from pe_group_changed.
+            // i_w_group_en 포트는 module 에 없음: tap_en 을 group_en 으로 gate 하여 처리.
+            pe_group #(
+                .IN_CN(1)
             ) pe_inst (
                 .i_clk          (i_clk),
                 .i_rstn         (i_rstn),
                 // 라인버퍼 data는 out_Ch 8개 PE group 공통
                 .i_line_valid   (w_line_valid),
-                .i_line_data    (w_line_data), 
-                
+                .i_line_data    (w_line_data),
+
                 // 0-LUT 가중치 정적 인덱싱
-                .i_weight       (i_weight_bram_data[16*(j%4) +: 16]), 
-                
-                .i_w_group_en   (r_weight_group_en[j]),
-                .i_w_tap_en     (r_weight_tap_en),
+                .i_weight       (i_weight_bram_data[16*(j%4) +: 16]),
+                // tap_en 을 group_en 으로 gate (이전 i_w_group_en 동작 보존)
+                .i_w_tap_en     ({9{r_weight_group_en[j]}} & r_weight_tap_en),
                 .i_line_done    (w_line_rd_done),
-                
+
                 .o_valid        (w_pe_valid[j]),
-                .o_partial      (w_partial[j]), // L1은 이게 최종 Conv 합산값임(추가 adder_tree 필요 x)
+                .o_partial      (w_partial[j]),
                 .o_pe_done      (w_pe_done[j])
             );
         end
     endgenerate
 
     // =========================================================================
-    // 3. Bias & ReLU
+    // 3. Q16.16 → (>>>8) → +bias(Q8.8) → ReLU + upper saturate
+    //    README spec : (sum_q1616 >>> 8) + sext(bias_q88) → sat_relu(32-bit → 16-bit)
     // =========================================================================
     wire [(OUT_CH*DATA_BIT)-1:0] w_final_concat;
-    
+
+    function automatic [15:0] sat_relu(input signed [31:0] v);
+        if (v[31])           sat_relu = 16'h0000;
+        else if (|v[30:15])  sat_relu = 16'h7FFF;
+        else                 sat_relu = v[15:0];
+    endfunction
+
     generate
         for (j = 0; j < OUT_CH; j = j + 1) begin : gen_relu
-            wire signed [21:0] w_sum = w_partial[j] + r_bias[j]; 
-            
-            //ReLU or clipping 
-            assign w_final_concat[16*j +: 16] = (w_sum[21]) ? 16'd0 : w_sum[15:0]; // 128bit(URAM port width*2) 에 대해 동일 위치의 out_CH 픽셀 packing. (LSB부터 16개씩)
+            // 36-bit Q16.16 (>>>8 algebraic) → 32-bit Q8.8 (low) + sext bias
+            wire signed [31:0] w_partial_q88 = $signed(w_partial[j][35:8]);
+            wire signed [31:0] w_bias_q88    = {{16{r_bias[j][15]}}, r_bias[j]};
+            wire signed [31:0] w_sum_q88     = w_partial_q88 + w_bias_q88;
+
+            assign w_final_concat[16*j +: 16] = sat_relu(w_sum_q88);
         end
     endgenerate
 

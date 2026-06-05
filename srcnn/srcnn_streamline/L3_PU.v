@@ -45,7 +45,7 @@ module L3_PU #(
     // --------------------------------------------------------
     wire [143:0]       w_line_data  [0:IN_CH-1];
     wire               w_line_valid [0:IN_CH-1];
-    wire signed [20:0] w_partial    [0:IN_CH-1];
+    wire signed [35:0] w_partial    [0:IN_CH-1];   // ★ Q16.16 (36-bit)
     wire               w_pe_valid   [0:IN_CH-1];
     wire               w_pe_done    [0:IN_CH-1];
     wire               w_line_rd_done;
@@ -123,28 +123,36 @@ module L3_PU #(
     assign o_pe_done      = w_pe_done[0];
 
     // --------------------------------------------------------
-    // [3] Channel Integration Adder Tree (4ch -> 1, 2 stage)
+    // [3] Channel Integration Adder Tree (4ch -> 1, 2 stage, Q16.16)
+    //     stage1 : pair sum 2 × 37-bit
+    //     stage2 : sum     1 × 38-bit Q16.16
     // --------------------------------------------------------
-    reg signed [22:0] r_add_stage1 [0:1];
-    reg signed [23:0] r_add_stage2;
+    reg signed [36:0] r_add_stage1 [0:1];
+    reg signed [37:0] r_add_stage2;
     reg               r_valid_stage1, r_valid_stage2;
 
     always @(posedge i_clk) begin
-        r_add_stage1[0] <= w_partial[0] + w_partial[1];
-        r_add_stage1[1] <= w_partial[2] + w_partial[3];
+        r_add_stage1[0] <= {w_partial[0][35], w_partial[0]} + {w_partial[1][35], w_partial[1]};
+        r_add_stage1[1] <= {w_partial[2][35], w_partial[2]} + {w_partial[3][35], w_partial[3]};
         r_valid_stage1  <= w_pe_valid[0];
 
-        r_add_stage2    <= r_add_stage1[0] + r_add_stage1[1];
+        r_add_stage2    <= {r_add_stage1[0][36], r_add_stage1[0]} + {r_add_stage1[1][36], r_add_stage1[1]};
         r_valid_stage2  <= r_valid_stage1;
     end
 
     // --------------------------------------------------------
-    // [4] Bias Latch & Saturation Truncate (no ReLU)
+    // [4] (>>>8) + bias(Q8.8) → bidirectional saturate (no ReLU)
+    //   README spec : (sum_q1616 >>> 8) + sext(bias_q88) → sat_bidir
+    //   r_add_stage2 (38-bit) >>> 8 = 30-bit Q8.8 → sext to 32-bit → +bias_q88
     // --------------------------------------------------------
-    // bias 위치: L2_PU와 동일하게 MSB 16bit (i_weight_bram_data[63 -: DATA_BIT])
-    // sum -> Q8.8 window {sign[31], [22:8]} 추출. 양/음 양쪽 오버플로우 sat.
+    function automatic [15:0] sat_bidir(input signed [31:0] v);
+        if      (~v[31] &&  (|v[30:15])) sat_bidir = 16'h7FFF;
+        else if ( v[31] && ~(&v[30:15])) sat_bidir = 16'h8000;
+        else                             sat_bidir = v[15:0];
+    endfunction
+
     reg signed [15:0] r_bias;
-    reg signed [31:0] r_final_sum;
+    reg signed [31:0] r_sum_q88;
     reg               r_final_valid;
 
     always @(posedge i_clk or negedge i_rstn) begin
@@ -152,20 +160,18 @@ module L3_PU #(
             r_bias        <= 0;
             o_pixel_valid <= 0;
             o_pixel_data  <= 0;
+            r_sum_q88     <= 0;
+            r_final_valid <= 0;
         end else begin
             if (i_bias_en) r_bias <= i_weight_bram_data[63 -: DATA_BIT];
 
-            r_final_sum   <= r_add_stage2 + r_bias;
+            // 38-bit Q16.16 >>>8 → take low 32 bits as Q8.8 sext + bias
+            r_sum_q88     <= $signed(r_add_stage2[37:8])
+                           + {{16{r_bias[15]}}, r_bias};
             r_final_valid <= r_valid_stage2;
 
             o_pixel_valid <= r_final_valid;
-
-            // saturate truncate (ReLU 없이 양수도 그대로, 단 Q8.8 구간 넘으면 sat)
-            if (r_final_sum[31]) begin
-                o_pixel_data <= (r_final_sum[24] == 1'b0) ? 16'h8000 : {r_final_sum[31], r_final_sum[22:8]};
-            end else begin
-                o_pixel_data <= (r_final_sum[24] == 1'b1) ? 16'h7FFF : {r_final_sum[31], r_final_sum[22:8]};
-            end
+            o_pixel_data  <= sat_bidir(r_sum_q88);
         end
     end
 

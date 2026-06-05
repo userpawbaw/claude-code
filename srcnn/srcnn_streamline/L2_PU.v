@@ -57,7 +57,7 @@ module L2_PU #(
     // --------------------------------------------------------
     wire [143:0]       w_line_data  [0:IN_CH-1];
     wire               w_line_valid [0:IN_CH-1];
-    wire signed [20:0] w_partial    [0:IN_CH-1];
+    wire signed [35:0] w_partial    [0:IN_CH-1];   // ★ Q16.16 (36-bit)
     wire               w_pe_valid   [0:IN_CH-1];
     wire               w_pe_done    [0:IN_CH-1];
     wire               w_line_rd_done;
@@ -165,38 +165,48 @@ module L2_PU #(
     endgenerate
 
     // --------------------------------------------------------
-    // [3] Channel Integration Adder Tree (공간 병렬 8채널 합산)
+    // [3] Channel Integration Adder Tree (공간 병렬 8채널 합산, Q16.16)
+    //     stage1 : pair sum 4 × 37-bit
+    //     stage2 : pair sum 2 × 38-bit
+    //     stage3 : sum     1 × 39-bit  ← final Q16.16
     // --------------------------------------------------------
     // from line_buff delay: +3clk +3clk
-    reg signed [22:0] r_add_stage1 [0:3];
-    reg signed [23:0] r_add_stage2 [0:1];
-    reg signed [24:0] r_add_stage3;
+    reg signed [36:0] r_add_stage1 [0:3];
+    reg signed [37:0] r_add_stage2 [0:1];
+    reg signed [38:0] r_add_stage3;
     reg               r_valid_stage1, r_valid_stage2, r_valid_stage3;
 
     always @(posedge i_clk) begin
-        // Stage 1
-        r_add_stage1[0] <= w_partial[0] + w_partial[1];
-        r_add_stage1[1] <= w_partial[2] + w_partial[3];
-        r_add_stage1[2] <= w_partial[4] + w_partial[5];
-        r_add_stage1[3] <= w_partial[6] + w_partial[7];
-        r_valid_stage1  <= w_pe_valid[0]; 
+        // Stage 1 : 36 + 36 → 37
+        r_add_stage1[0] <= {w_partial[0][35], w_partial[0]} + {w_partial[1][35], w_partial[1]};
+        r_add_stage1[1] <= {w_partial[2][35], w_partial[2]} + {w_partial[3][35], w_partial[3]};
+        r_add_stage1[2] <= {w_partial[4][35], w_partial[4]} + {w_partial[5][35], w_partial[5]};
+        r_add_stage1[3] <= {w_partial[6][35], w_partial[6]} + {w_partial[7][35], w_partial[7]};
+        r_valid_stage1  <= w_pe_valid[0];
 
-        // Stage 2
-        r_add_stage2[0] <= r_add_stage1[0] + r_add_stage1[1];
-        r_add_stage2[1] <= r_add_stage1[2] + r_add_stage1[3];
+        // Stage 2 : 37 + 37 → 38
+        r_add_stage2[0] <= {r_add_stage1[0][36], r_add_stage1[0]} + {r_add_stage1[1][36], r_add_stage1[1]};
+        r_add_stage2[1] <= {r_add_stage1[2][36], r_add_stage1[2]} + {r_add_stage1[3][36], r_add_stage1[3]};
         r_valid_stage2  <= r_valid_stage1;
 
-        // Stage 3
-        r_add_stage3    <= r_add_stage2[0] + r_add_stage2[1];
+        // Stage 3 : 38 + 38 → 39 Q16.16
+        r_add_stage3    <= {r_add_stage2[0][37], r_add_stage2[0]} + {r_add_stage2[1][37], r_add_stage2[1]};
         r_valid_stage3  <= r_valid_stage2;
     end
 
     // --------------------------------------------------------
-    // [4] Bias Latch & ReLU Pipeline
+    // [4] (>>>8) + bias(Q8.8) → ReLU + upper saturate
+    //   README spec : (sum_q1616 >>> 8) + sext(bias_q88) → sat_relu
+    //   r_add_stage3 (39-bit) >>> 8 = 31-bit Q8.8 → sext to 32-bit → +bias_q88
     // --------------------------------------------------------
-    // from line_buff delay: +3clk +3clk +2clk
+    function automatic [15:0] sat_relu(input signed [31:0] v);
+        if (v[31])           sat_relu = 16'h0000;
+        else if (|v[30:15])  sat_relu = 16'h7FFF;
+        else                 sat_relu = v[15:0];
+    endfunction
+
     reg signed [15:0] r_bias;
-    reg signed [31:0] r_final_sum;
+    reg signed [31:0] r_sum_q88;
     reg               r_final_valid;
 
     always @(posedge i_clk or negedge i_rstn) begin
@@ -204,20 +214,18 @@ module L2_PU #(
             r_bias        <= 0;
             o_pixel_valid <= 0;
             o_pixel_data  <= 0;
+            r_sum_q88     <= 0;
+            r_final_valid <= 0;
         end else begin
-            if (w_bias_en) r_bias <= i_weight_bram_data[63 -: DATA_BIT]; 
+            if (w_bias_en) r_bias <= i_weight_bram_data[63 -: DATA_BIT];
 
-            r_final_sum   <= r_add_stage3 + r_bias;
+            // 39-bit Q16.16 >>>8 → take low 32 bits as Q8.8 with int extended
+            r_sum_q88     <= $signed(r_add_stage3[38:8])
+                           + {{16{r_bias[15]}}, r_bias};
             r_final_valid <= r_valid_stage3;
 
             o_pixel_valid <= r_final_valid;
-            
-            // ReLU & clipping
-            if (r_final_sum[31]) begin
-                o_pixel_data <= 16'd0; // 음수면 0
-            end else begin
-                    o_pixel_data <= (r_final_sum[24] == 1'b1) ? 16'h8FFF : {r_final_sum[31], r_final_sum[22:8]};
-            end
+            o_pixel_data  <= sat_relu(r_sum_q88);
         end
     end
     
