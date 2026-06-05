@@ -230,21 +230,21 @@ module top #(
                                 w_fifo_valid;
 
     PU #(.MAX_CH(MAX_CH)) u_pu (
-        .i_clk          (i_clk),
-        .i_rstn         (i_rstn),
-        .i_IDLE_rst     (w_IDLE_rst),
-        .i_dispatch_rst (w_dispatch_rst),
-        .i_layer_cnt    (w_layer_cnt),
-        .i_out_ch_cnt   (w_out_ch_cnt),
-        .i_input_valid  (w_pu_input_valid),
-        .i_ch_data      (w_pu_ch_data),
-        .i_is_pad_valid (w_is_pad_valid),
-        .i_w_rd_valid   (w_w_rd_valid),
-        .i_w_word       (w_w_dout),
-        .i_bias_en      (w_bias_en),
-        .o_pixel_valid  (w_pu_pixel_valid),
-        .o_pixel_data   (w_pu_pixel_data),
-        .o_img_done     (w_pu_img_done)
+        .i_clk              (i_clk),
+        .i_rstn             (i_rstn),
+        .i_IDLE_rst         (w_IDLE_rst),
+        .i_dispatch_rst     (w_dispatch_rst),
+        .i_layer_cnt        (w_layer_cnt),
+        .i_out_ch_cnt       (w_out_ch_cnt),
+        .i_input_valid      (w_pu_input_valid),
+        .i_uram_data        (w_pu_ch_data),
+        .i_is_pad_valid     (w_is_pad_valid),
+        .i_w_rd_en          (w_w_rd_valid),
+        .i_weight_bram_data (w_w_dout),
+        .i_bias_en          (w_bias_en),
+        .o_pixel_valid      (w_pu_pixel_valid),
+        .o_pixel_data       (w_pu_pixel_data),
+        .o_img_done         (w_pu_img_done)
     );
 
     // ------------------------------------------------------------------
