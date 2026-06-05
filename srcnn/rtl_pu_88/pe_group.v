@@ -1,8 +1,9 @@
 `timescale 1ns / 1ps
 // pe_group : 3x3 conv PE 9개 + 공간 adder tree (1 in_ch).
 //   weight 인터페이스: i_weight (16bit) 공통 + i_w_tap_en[8:0] (one-hot tap 선택)
-//   output: o_partial (21-bit signed) = 9-tap 공간합 + valid + pe_done
-//   bias/ReLU 는 상위 PU 에서 처리. 본 모듈은 산수 정제 안 함.
+//   output: o_partial (36-bit signed Q16.16) = 9-tap 공간합 + valid + pe_done
+//   PE 가 full Q16.16 (32-bit) 곱셈을 그대로 흘려보내므로 본 adder tree 도
+//   Q16.16 누적. Q8.8 변환/saturation 은 상위 PU 의 출력 stage 에서 수행.
 module pe_group (
     input  wire                 i_clk,
     input  wire                 i_rstn,
@@ -15,11 +16,11 @@ module pe_group (
 
     input  wire                 i_line_img_done,
     output reg                  o_valid,
-    output reg  signed [20:0]   o_partial,
+    output reg  signed [35:0]   o_partial,     // ★ Q16.16 (9 × 32-bit 합, 36-bit safe)
     output wire                 o_pe_done
 );
     wire            pe_valid;
-    wire [16*9-1:0] pe_output;
+    wire [32*9-1:0] pe_output;                 // ★ 9 × 32-bit Q16.16
 
     genvar i;
     generate
@@ -32,14 +33,16 @@ module pe_group (
                 .i_input  (i_line_data[16*9 - 1 - 16*i -: 16]),
                 .i_weight (i_weight),
                 .o_valid  (pe_valid),
-                .o_output (pe_output[16*i +: 16])
+                .o_output (pe_output[32*i +: 32])
             );
         end
     endgenerate
 
-    // adder tree: 9 → 3 → 1
-    reg              adder_val1;
-    reg signed [19:0] r_add_stage1 [2:0];
+    // adder tree: 9 → 3 → 1  (Q16.16 그대로 누적)
+    //   stage1: 3-input 합 × 3 → 34-bit (32 + ceil(log2 3) = 34)
+    //   stage2: 3-input 합     → 36-bit
+    reg               adder_val1;
+    reg signed [33:0] r_add_stage1 [2:0];
 
     integer j;
     always @(posedge i_clk or negedge i_rstn) begin
@@ -53,9 +56,9 @@ module pe_group (
         end else begin
             { adder_val1, o_valid } <= { pe_valid, adder_val1 };
             for (j = 0; j < 3; j = j + 1) begin
-                r_add_stage1[j] <= $signed(pe_output[48*j      +: 16]) +
-                                   $signed(pe_output[48*j + 16 +: 16]) +
-                                   $signed(pe_output[48*j + 32 +: 16]);
+                r_add_stage1[j] <= $signed(pe_output[96*j      +: 32]) +
+                                   $signed(pe_output[96*j + 32 +: 32]) +
+                                   $signed(pe_output[96*j + 64 +: 32]);
             end
             o_partial <= r_add_stage1[0] + r_add_stage1[1] + r_add_stage1[2];
         end

@@ -13,12 +13,12 @@ module PE (
     input  wire signed [15:0] i_input,
     input  wire signed [15:0] i_weight,
     output reg                o_valid,
-    output wire signed [15:0] o_output
+    output wire signed [31:0] o_output     // ★ full Q16.16
 );
     reg signed [15:0] r_weight;
     reg signed [31:0] w_output;
     reg               clr;
-    assign o_output = o_valid ? {w_output[31], w_output[22:8]} : 16'sd0;
+    assign o_output = o_valid ? w_output : 32'sd0;   // ★ no Q7.8 truncation
     always @(posedge i_clk or negedge i_rstn) begin
         if (~i_rstn) begin
             o_valid  <= 0;
