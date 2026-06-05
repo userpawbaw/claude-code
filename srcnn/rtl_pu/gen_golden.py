@@ -74,38 +74,33 @@ print(f"B1 [{B1.min()},{B1.max()}]  B2 [{B2.min()},{B2.max()}]  B3 [{B3.min()},{
 # ---- 입력 (3 img × 150×150, Q8.8 signed-positive 범위) ----
 X = np.random.randint(0, 128, size=(NUM_IMG, IMG, IMG), dtype=np.int64) * ONE
 
-# ---- conv 모델 (PE 규칙: 곱 후 Q7.8 추출) ----
-def pe_out(x, w):
-    prod = int(x) * int(w)
-    p32 = prod & 0xFFFFFFFF
-    sign = (p32 >> 31) & 1
-    mag = (p32 >> 8) & 0x7FFF
-    val = (sign << 15) | mag
-    return val - 0x10000 if val & 0x8000 else val
-
-def conv3x3_same(inp, kernel):
-    H,W = inp.shape
+# ---- conv 모델 (README spec: full Q16.16 → >>8 → +bias(Q8.8) → sat) ----
+def conv3x3_same_q1616(inp_q88, kernel_q88):
+    H, W = inp_q88.shape
     pad = np.zeros((H+2, W+2), dtype=np.int64)
-    pad[1:H+1, 1:W+1] = inp
-    k = kernel.reshape(9).astype(np.int64)
-    out = np.zeros((H,W), dtype=np.int64)
+    pad[1:H+1, 1:W+1] = inp_q88
+    k = kernel_q88.reshape(9).astype(np.int64)
+    out = np.zeros((H, W), dtype=np.int64)
     for r in range(H):
         for c in range(W):
             win = pad[r:r+3, c:c+3].reshape(9)
             acc = 0
             for t in range(9):
-                acc += pe_out(win[t], k[t])
-            out[r,c] = acc
+                acc += int(win[t]) * int(k[t])    # Q16.16 full precision
+            out[r, c] = acc
     return out
 
-def refine16(x):
-    x = np.asarray(x, dtype=np.int64)
-    sign = (x < 0).astype(np.int64)
-    mag15 = np.abs(x) & 0x7FFF
-    return np.where(sign==1, -mag15, mag15).astype(np.int64)
+def to_q88_relu_sat(acc_q1616, bias_q88):
+    v = (acc_q1616 >> 8) + int(bias_q88)
+    v = np.where(v < 0, 0, v)
+    v = np.where(v > 0x7FFF, 0x7FFF, v)
+    return v.astype(np.int64)
 
-# bias 는 conv 누적 후 더해진다 (raw int, Q8.8). 그 다음 refine, ReLU(L1/L2).
-def relu(x): return np.maximum(x, 0)
+def to_q88_bidir_sat(acc_q1616, bias_q88):
+    v = (acc_q1616 >> 8) + int(bias_q88)
+    v = np.where(v >  0x7FFF,  0x7FFF, v)
+    v = np.where(v < -0x8000, -0x8000, v)
+    return v.astype(np.int64)
 
 # ---- 3 img 처리 ----
 L1_all  = np.zeros((NUM_IMG, 4, IMG, IMG), dtype=np.int64)
@@ -113,20 +108,23 @@ L2_all  = np.zeros((NUM_IMG, 2, IMG, IMG), dtype=np.int64)
 OUT_all = np.zeros((NUM_IMG, IMG, IMG), dtype=np.int64)
 
 for m in range(NUM_IMG):
+    # L1
     L1 = np.zeros((4, IMG, IMG), dtype=np.int64)
     for oc in range(4):
-        conv = conv3x3_same(X[m], W1[oc, 0])
-        L1[oc] = refine16(relu(conv + int(B1[oc])))
+        acc_q1616 = conv3x3_same_q1616(X[m], W1[oc, 0])
+        L1[oc] = to_q88_relu_sat(acc_q1616, B1[oc])
+    # L2
     L2 = np.zeros((2, IMG, IMG), dtype=np.int64)
     for oc in range(2):
-        acc = np.zeros((IMG, IMG), dtype=np.int64)
+        acc_q1616 = np.zeros((IMG, IMG), dtype=np.int64)
         for ic in range(4):
-            acc += conv3x3_same(L1[ic], W2[oc, ic])
-        L2[oc] = refine16(relu(acc + int(B2[oc])))
-    acc = np.zeros((IMG, IMG), dtype=np.int64)
+            acc_q1616 += conv3x3_same_q1616(L1[ic], W2[oc, ic])
+        L2[oc] = to_q88_relu_sat(acc_q1616, B2[oc])
+    # L3
+    acc_q1616 = np.zeros((IMG, IMG), dtype=np.int64)
     for ic in range(2):
-        acc += conv3x3_same(L2[ic], W3[0, ic])
-    OUT = refine16(acc + int(B3[0]))   # L3: no ReLU
+        acc_q1616 += conv3x3_same_q1616(L2[ic], W3[0, ic])
+    OUT = to_q88_bidir_sat(acc_q1616, B3[0])
     L1_all[m]  = L1
     L2_all[m]  = L2
     OUT_all[m] = OUT

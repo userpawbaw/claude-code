@@ -29,15 +29,15 @@ module PE(
     input signed [15:0]    i_weight,
     
     output reg o_valid,
-    output signed [15:0]   o_output
+    output signed [31:0]   o_output     // ★ full Q16.16 product (no truncation)
 );
-    reg  signed [15:0]  r_weight;   // weight stationary weight  
-    wire signed [31:0]  w_output;   // valid filtered output  
-    
-    
+    reg  signed [15:0]  r_weight;   // weight stationary weight
+    wire signed [31:0]  w_output;   // valid filtered output
+
+
     reg clr;
-    
-    assign o_output = o_valid ? {w_output[31], w_output[22:8]} : 16'sd0;  // q8.8 (sign + Q7.8, clean 16bit)
+
+    assign o_output = o_valid ? w_output : 32'sd0;   // ★ Q16.16 = Q8.8 × Q8.8 그대로
     
     always@(posedge i_clk or negedge i_rstn) begin
         if(~i_rstn)begin

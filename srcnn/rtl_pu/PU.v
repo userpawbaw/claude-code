@@ -197,7 +197,7 @@ module PU #(
     // 4 pe_group
     // ------------------------------------------------------------------
     wire               w_pe_valid [0:MAX_CH-1];
-    wire signed [20:0] w_partial  [0:MAX_CH-1];
+    wire signed [35:0] w_partial  [0:MAX_CH-1];
     wire               w_pe_done  [0:MAX_CH-1];
 
     generate
@@ -218,19 +218,43 @@ module PU #(
     endgenerate
 
     // ------------------------------------------------------------------
-    // 통합 파이프라인 (3 stage)
+    // 통합 파이프라인 (3 stage) — README spec Q16.16 → (>>>8) → Q8.8 + bias → sat
+    //   Stage A : partial 처리 (L1 pass / L2 pair sum / L3 single pair) — 37-bit Q16.16
+    //   Stage B : 채널 합 → (>>>8) → 32-bit Q8.8 + sext_bias
+    //   Stage C : L1/L2 ReLU+upper sat / L3 bidirectional sat → 16-bit Q8.8
     // ------------------------------------------------------------------
     // Stage A
-    reg  signed [22:0] r_sA [0:MAX_CH-1];      // 22-bit (쌍합 여유)
+    reg  signed [36:0] r_sA [0:MAX_CH-1];      // 37-bit Q16.16
     reg                r_vA;
     // Stage B
-    reg  signed [23:0] r_sB [0:MAX_CH-1];      // 24-bit (3-input adder + bias)
+    reg  signed [31:0] r_sB [0:MAX_CH-1];      // 32-bit Q8.8 (>>>8 + bias)
     reg                r_vB;
-
-    // 각 stage 에서 layer 모드를 sample. 모드 자체는 i_layer_cnt 가 그 picture 전체에
-    // 걸쳐 안정이므로 동기 sampling 만으로 충분.
     reg [1:0] r_layer_A, r_layer_B;
-    reg       r_out_ch_A, r_out_ch_B;
+
+    function automatic signed [36:0] sext36_37(input signed [35:0] x);
+        sext36_37 = {x[35], x};
+    endfunction
+    function automatic signed [31:0] sext16_32(input signed [15:0] b);
+        sext16_32 = {{16{b[15]}}, b};
+    endfunction
+    // L1 path (and L3 single pair) : 37-bit Q16.16 → (>>>8) → 32-bit Q8.8.
+    function automatic signed [31:0] shr8_37(input signed [36:0] x);
+        reg signed [36:0] s;
+        begin
+            s = x >>> 8;
+            shr8_37 = s[31:0];
+        end
+    endfunction
+    // L2 path : 2 × 37-bit pair-sum → 38-bit Q16.16 → (>>>8) → 32-bit Q8.8.
+    function automatic signed [31:0] sum2_shr8(input signed [36:0] a, input signed [36:0] b);
+        reg signed [37:0] s_q1616;
+        reg signed [37:0] s_q88;
+        begin
+            s_q1616  = {a[36], a} + {b[36], b};
+            s_q88    = s_q1616 >>> 8;
+            sum2_shr8 = s_q88[31:0];
+        end
+    endfunction
 
     integer j;
     always @(posedge i_clk or negedge i_rstn) begin
@@ -241,30 +265,25 @@ module PU #(
             end
             r_vA <= 0;  r_vB <= 0;
             r_layer_A <= 0; r_layer_B <= 0;
-            r_out_ch_A <= 0; r_out_ch_B <= 0;
         end else begin
-            // ---- Stage A ----
+            // ---- Stage A ----  Q16.16 누적 유지 (no precision loss)
             r_vA      <= w_pe_valid[0];
             r_layer_A <= i_layer_cnt;
-            r_out_ch_A <= i_out_ch_cnt;
             case (i_layer_cnt)
-                2'd0: begin // L1: pass-through
-                    r_sA[0] <= $signed({w_partial[0][20], w_partial[0]});
-                    r_sA[1] <= $signed({w_partial[1][20], w_partial[1]});
-                    r_sA[2] <= $signed({w_partial[2][20], w_partial[2]});
-                    r_sA[3] <= $signed({w_partial[3][20], w_partial[3]});
+                2'd0: begin // L1: pass-through (per-oc)
+                    r_sA[0] <= sext36_37(w_partial[0]);
+                    r_sA[1] <= sext36_37(w_partial[1]);
+                    r_sA[2] <= sext36_37(w_partial[2]);
+                    r_sA[3] <= sext36_37(w_partial[3]);
                 end
-                2'd1: begin // L2: pair sum
-                    r_sA[0] <= $signed({w_partial[0][20], w_partial[0]}) +
-                               $signed({w_partial[1][20], w_partial[1]});
-                    r_sA[1] <= $signed({w_partial[2][20], w_partial[2]}) +
-                               $signed({w_partial[3][20], w_partial[3]});
+                2'd1: begin // L2: pair sum (4 ic → 2 pairs)
+                    r_sA[0] <= sext36_37(w_partial[0]) + sext36_37(w_partial[1]);
+                    r_sA[1] <= sext36_37(w_partial[2]) + sext36_37(w_partial[3]);
                     r_sA[2] <= 0;
                     r_sA[3] <= 0;
                 end
-                2'd2: begin // L3: pair sum (2 ch)
-                    r_sA[0] <= $signed({w_partial[0][20], w_partial[0]}) +
-                               $signed({w_partial[1][20], w_partial[1]});
+                2'd2: begin // L3: pair sum (2 ic only)
+                    r_sA[0] <= sext36_37(w_partial[0]) + sext36_37(w_partial[1]);
                     r_sA[1] <= 0;
                     r_sA[2] <= 0;
                     r_sA[3] <= 0;
@@ -274,25 +293,22 @@ module PU #(
                 end
             endcase
 
-            // ---- Stage B ----
+            // ---- Stage B ----  (>>>8) + bias(Q8.8)
             r_vB      <= r_vA;
             r_layer_B <= r_layer_A;
-            r_out_ch_B <= r_out_ch_A;
             case (r_layer_A)
-                2'd0: begin // L1: each + bias[g]
-                    r_sB[0] <= r_sA[0] + $signed({{8{r_bias[0][15]}}, r_bias[0]});
-                    r_sB[1] <= r_sA[1] + $signed({{8{r_bias[1][15]}}, r_bias[1]});
-                    r_sB[2] <= r_sA[2] + $signed({{8{r_bias[2][15]}}, r_bias[2]});
-                    r_sB[3] <= r_sA[3] + $signed({{8{r_bias[3][15]}}, r_bias[3]});
+                2'd0: begin // L1: 각 r_sA[g] → 32-bit Q8.8 + bias[g]
+                    r_sB[0] <= shr8_37(r_sA[0]) + sext16_32(r_bias[0]);
+                    r_sB[1] <= shr8_37(r_sA[1]) + sext16_32(r_bias[1]);
+                    r_sB[2] <= shr8_37(r_sA[2]) + sext16_32(r_bias[2]);
+                    r_sB[3] <= shr8_37(r_sA[3]) + sext16_32(r_bias[3]);
                 end
-                2'd1: begin // L2: pair sum + bias[oc_sel]
-                    r_sB[0] <= r_sA[0] + r_sA[1] +
-                               $signed({{8{w_L2_bias[15]}}, w_L2_bias});
+                2'd1: begin // L2: 2 pair 합 (>>>8) + bias[oc_sel]
+                    r_sB[0] <= sum2_shr8(r_sA[0], r_sA[1]) + sext16_32(w_L2_bias);
                     r_sB[1] <= 0; r_sB[2] <= 0; r_sB[3] <= 0;
                 end
-                2'd2: begin // L3: pair sum + bias[0]
-                    r_sB[0] <= r_sA[0] +
-                               $signed({{8{r_bias[0][15]}}, r_bias[0]});
+                2'd2: begin // L3: single pair (>>>8) + bias[0]
+                    r_sB[0] <= shr8_37(r_sA[0]) + sext16_32(r_bias[0]);
                     r_sB[1] <= 0; r_sB[2] <= 0; r_sB[3] <= 0;
                 end
                 default: begin
@@ -302,7 +318,20 @@ module PU #(
         end
     end
 
-    // Stage C : refine + ReLU/clip → o_pixel_data
+    // Stage C : saturate-to-16bit Q8.8
+    //   L1/L2 : v<0 → 0, v>0x7FFF → 0x7FFF, else v[15:0]                (ReLU + upper sat)
+    //   L3    : v<-0x8000 → 0x8000, v>0x7FFF → 0x7FFF, else v[15:0]     (bidirectional sat)
+    function automatic [15:0] sat_relu(input signed [31:0] v);
+        if (v[31])           sat_relu = 16'h0000;
+        else if (|v[30:15])  sat_relu = 16'h7FFF;
+        else                 sat_relu = v[15:0];
+    endfunction
+    function automatic [15:0] sat_bidir(input signed [31:0] v);
+        if      (~v[31] &&  (|v[30:15])) sat_bidir = 16'h7FFF;
+        else if ( v[31] && ~(&v[30:15])) sat_bidir = 16'h8000;
+        else                             sat_bidir = v[15:0];
+    endfunction
+
     integer kk;
     always @(posedge i_clk or negedge i_rstn) begin
         if (~i_rstn) begin
@@ -311,21 +340,16 @@ module PU #(
         end else begin
             o_pixel_valid <= r_vB;
             case (r_layer_B)
-                2'd0: begin // L1: 4 oc packed, ReLU
-                    for (kk = 0; kk < MAX_CH; kk = kk + 1) begin
-                        o_pixel_data[16*((MAX_CH-1)-kk) +: 16] <=
-                            (r_sB[kk][23]) ? 16'sd0
-                                           : {r_sB[kk][23], r_sB[kk][14:0]};
-                    end
+                2'd0: begin // L1: 4 oc packed, ReLU+sat
+                    for (kk = 0; kk < MAX_CH; kk = kk + 1)
+                        o_pixel_data[16*((MAX_CH-1)-kk) +: 16] <= sat_relu(r_sB[kk]);
                 end
-                2'd1: begin // L2: slot 0 with ReLU
-                    o_pixel_data[48 +: 16] <=
-                        (r_sB[0][23]) ? 16'sd0
-                                      : {r_sB[0][23], r_sB[0][14:0]};
+                2'd1: begin // L2: slot 0, ReLU+sat
+                    o_pixel_data[48 +: 16] <= sat_relu(r_sB[0]);
                     o_pixel_data[0  +: 48] <= 48'd0;
                 end
-                2'd2: begin // L3: slot 0, NO ReLU (refine only)
-                    o_pixel_data[48 +: 16] <= {r_sB[0][23], r_sB[0][14:0]};
+                2'd2: begin // L3: slot 0, bidirectional sat (no ReLU)
+                    o_pixel_data[48 +: 16] <= sat_bidir(r_sB[0]);
                     o_pixel_data[0  +: 48] <= 48'd0;
                 end
                 default: o_pixel_data <= 0;
