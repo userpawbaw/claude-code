@@ -205,10 +205,22 @@ def pack_streamline_8_4():
             f.write(pack64_lsb(w) + "\n")
     print(f"[streamline 8_4 L2] {out2}  ({L2_WORDS} words)")
 
-    # ---- L3 ----
-    # streamline 8_4 의 L3 PU RTL 가 미정. 패킹 보류.
-    # (data 자체는 W3 (1,4,9), B3 (1,) 로 확보됨.)
-    print(f"[streamline 8_4 L3] SKIPPED — L3 PU RTL not yet defined in srcnn/srcnn_streamline/")
+    # ---- L3 (PR 후 추가됨) ----
+    # L3_PU.v: 64-bit × 10 word, 1 word/tap (out_ch=1, no time-partition).
+    #   addr n (n=0..8): slot ic(0..3) LSB-first = W3[0, ic, n]
+    #     (i_weight_bram_data[16*ic +: 16])
+    #   addr 9 (bias): slot 3 (MSB-side, bits[63:48]) = B3[0]
+    L3_WORDS = 10
+    words = [[0,0,0,0] for _ in range(L3_WORDS)]
+    for n in range(9):
+        for ic in range(4):
+            words[n][ic] = W3[0, ic, n]
+    words[9][3] = B3[0]
+    out3 = os.path.join(REPO_ROOT, "srcnn_streamline", "work", "weight_L3.txt")
+    with open(out3, "w") as f:
+        for w in words:
+            f.write(pack64_lsb(w) + "\n")
+    print(f"[streamline 8_4 L3] {out3}  ({L3_WORDS} words)")
 
 if __name__ == "__main__":
     pack_recursive_4_2()
