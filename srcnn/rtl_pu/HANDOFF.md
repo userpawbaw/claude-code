@@ -1,12 +1,13 @@
-# HANDOFF — SRCNN 4_2 PU 디자인, 실 데이터 연결 준비
+# HANDOFF — SRCNN 4_2 Recursive PU 디자인, 실 데이터 연결 준비
 
 > 다음 세션이 `/clear` 후 바로 이어갈 수 있도록 정리. 새 세션은 `git pull` → 본 문서 읽기 → "Next session" 의 Phase 0 부터 진행.
 
-## 1. 현재 상태 (commit `7c24a07`, branch `claude/zen-cannon-e9RTP`, PR #8)
+## 1. 현재 상태 (branch `claude/zen-cannon-e9RTP`, PR #8)
 
-- `srcnn/rtl_pu/` PU 기반 4_2 디자인 완성. iverilog 회귀 **ALL PASS**:
+- `srcnn/rtl_pu/` **단일 PU (recursive 구조)** 기반 4_2 디자인 완성.
+- **PU.v** 하나가 `i_layer_cnt` 로 L1/L2/L3 시분할 처리 (이전 L1_PU/L2_PU/L3_PU 는 삭제).
+- iverilog 회귀 **ALL PASS**:
   - 3 images × (L1 270,000 + L2 135,000 + OUT 67,500) = 472,500 pixel, 0 errors
-  - conv-only / ReLU 분기 없음 (ReLU 는 PU 별 hard-wired)
 - weight / input / golden 은 모두 **랜덤 합성 데이터** (`gen_golden.py` 가 생성).
 - 다음 세션 목표: **실 SRCNN 학습 weight + 실 Y-채널 이미지** 로 RTL 검증.
 
@@ -17,35 +18,44 @@
 - L2: 4 → 2 (3×3, ReLU, out_ch 시분할 — pe_group 은 4개 ic 병렬)
 - L3: 2 → 1 (3×3, NO ReLU, Q7.8 refine)
 
-### PU 인터페이스 (공통 패턴)
+### PU 인터페이스 (단일 모듈, layer_cnt 로 모드 전환)
 | 입력 | 출력 |
 |---|---|
-| `i_clk, i_rstn, i_IDLE_rst, i_dispatch_rst` | `o_pixel_valid, o_pixel_data, o_img_done` |
-| `i_input_valid + i_pixel/ch_data` | (L1 만 64-bit packed = 4 oc 동시) |
-| `i_w_rd_valid + i_w_word(64bit) + i_bias_en` | |
-| `i_is_pad_valid` (L2/L3), `i_out_ch_cnt` (L2) | |
+| `i_clk, i_rstn, i_IDLE_rst, i_dispatch_rst` | `o_pixel_valid` |
+| `i_layer_cnt[1:0]` (0:L1, 1:L2, 2:L3) | `o_pixel_data[63:0]` (L1: 4 oc packed, L2/L3: slot 0) |
+| `i_out_ch_cnt` (L2 oc selector) | `o_img_done` |
+| `i_input_valid + i_ch_data[63:0]` (4 ch packed) | |
+| `i_is_pad_valid` | |
+| `i_w_rd_valid + i_w_word[63:0] + i_bias_en` | |
 
-각 PU 는 자체적으로:
-- weight tap 분배 (combinational `tap_en`, PE 의 `i_en_w` 와 BRAM dout 을 같은 clk 에 정렬)
-- bias latch (`r_bias` regs, `i_bias_en` 펄스에 word slot 에서 latch)
-- adder tree (L2: 4→2→1, L3: 2→1)
-- bias add + (ReLU/clip) + Q7.8 refine
+PU 내부:
+- **4 line_buffer** (max over layers). L1: ch0 broadcast / L2: 4 ic 독립 / L3: ch 0,1 (2,3 idle).
+- **4 pe_group** (3×3 conv + adder tree). 각 group g 는 weight bus 와 line_buffer[g] window 사용.
+- **Weight dispatcher**: sub_max-aware. L1/L2 (sub_max=1) 는 매 w_rd_valid 마다 tap 진행, slot g→pe_group g. L3 (sub_max=2) 는 한 word 의 sub0/sub1 을 2 clk 에 걸쳐 pe_group[0,1] 에 dispatch.
+- **Bias regs (4개)**: i_bias_en 펄스에 word slot 0..3 모두 latch. L1=4개 모두 사용 / L2=oc_cnt 로 r_bias[0|1] 선택 / L3=r_bias[0].
+- **통합 파이프라인 (3 stage)** — pe_group 의 3clk 출력 이후:
+  - Stage A: partial 처리 (L1=pass-through, L2=pair sum, L3=pair0 sum)
+  - Stage B: bias add (L1=각 oc 별 / L2=쌍합 합산+bias / L3=pair0+bias)
+  - Stage C: refine + ReLU(L1/L2) / refine only(L3) → 출력
+  - 총 latency: window valid → o_pixel_valid = 6 clk
 
-### 데이터 흐름
+### 데이터 흐름 (단일 PU, layer 시분할)
 ```
 input BRAM (16b × 67500)
        │
-       │  layer 0
+       │  layer 0 (PU mode = L1)
        ▼
-   L1_PU ──► 4 packers ──► URAM_L1[0..3] (64b × 5625)
-                                   │
-                                   │  layer 1
-                                   ▼
-                            4 FIFOs ──► L2_PU ──► 1 packer ──► URAM_L2[out_ch_cnt]
-                                                                    │
-                                                                    │  layer 2
-                                                                    ▼
-                                                              2 FIFOs ──► L3_PU ──► 1 packer ──► o_pixel_*
+       ├──────────► PU (단일) ──► 4 packers ──► URAM_L1[0..3] (64b × 5625)
+       │                                              │
+       │                                              │  layer 1 (PU mode = L2, oc0/oc1 시분할)
+       │                                              ▼
+       │                                        4 FIFOs ──► PU ──► packer[0] ──► URAM_L2[out_ch_cnt]
+       │                                                                              │
+       │                                                                              │  layer 2 (PU mode = L3)
+       │                                                                              ▼
+       │                                                                        2 FIFOs ──► PU ──► packer[0] ──► o_pixel_*
+       │
+       └─ (next img: layer 0 mode 로 돌아옴, FSM 의 img_cnt 가 다음 img 입력 addr 결정)
 ```
 
 ### Weight BRAM (35 word × 64-bit) — bias 는 각 layer 끝에
@@ -85,28 +95,28 @@ S_IDLE → S_W_READ(L1, 10 word) → S_I_STREAM(150² + pad) → S_DONE
 srcnn/rtl_pu/
 ├── DESIGN.md              ── 아키텍처 상세
 ├── HANDOFF.md             ── 본 문서
-├── FSM_pad.v              ── 3-img FSM
-├── L1_PU.v / L2_PU.v / L3_PU.v
+├── FSM_pad.v              ── 3-img FSM (img_cnt + layer_cnt + out_ch_cnt)
+├── PU.v                   ── 단일 PU (layer_cnt 로 모드 전환)
 ├── pe_group.v             ── 3×3 PE + adder tree (partial sum 만)
 ├── line_buffer_improved.v ── 152-wide line buffer (padding 포함)
 ├── PE.v                   ── DSP macro 기반 PE (Vivado)
 ├── delay_shift.v
 ├── fifo_add_to_uram.v     ── 4-pixel 16b → 64b packer
 ├── stubs.v                ── iverilog 검증용 (PE / BRAM / URAM / FIFO 흉내)
-├── top.v                  ── 통합 top
-├── tb_top.v               ── 3-img 회귀 TB (pack_*_we 캡처)
+├── top.v                  ── 통합 top (단일 PU 인스턴스 + 4 packer + URAM/FIFO 라우팅)
+├── tb_top.v               ── 3-img 회귀 TB (w_pack_we[*] 캡처)
 └── gen_golden.py          ── 랜덤 weight/input/golden 생성
 ```
 
-**iverilog 회귀 (현재 ALL PASS)**
+**iverilog 회귀 (현재 ALL PASS, 약 1분)**
 ```bash
 cd srcnn/rtl_pu/work
 python3 ../gen_golden.py
 iverilog -g2012 -o tb_top.vvp ../tb_top.v ../stubs.v ../FSM_pad.v \
-    ../L1_PU.v ../L2_PU.v ../L3_PU.v ../pe_group.v \
+    ../PU.v ../pe_group.v \
     ../line_buffer_improved.v ../delay_shift.v ../fifo_add_to_uram.v ../top.v
 vvp tb_top.vvp | tail
-# 기대: ALL PASS, ~1분 시뮬
+# 기대: ALL PASS
 ```
 
 ## 4. 다음 세션 — 실 데이터 연결

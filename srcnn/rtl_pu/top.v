@@ -1,12 +1,15 @@
 `timescale 1ns / 1ps
-// top : PU-based SRCNN 4_2 (1->4->2->1), 3-image 연속 처리.
-//   - L1_PU / L2_PU / L3_PU 인스턴스, 각 PU 가 bias+ReLU(L3 제외) 통합.
-//   - weight BRAM 64bit x 35 word, input BRAM 16bit x 67500 word (3 img concat).
-//   - URAM_L1 4뱅크 + URAM_L2 2뱅크. img 간 재사용.
-//   - L1 출력은 4 oc 동시 → 4 packer 가 ch 별로 spatial 4-pix word 패킹.
-//   - L2/L3 는 16-bit/cycle 단일 stream → 1 packer.
-//   - o_img_done : 매 img L3 완료 시 1-clk pulse.
-//   - o_all_done : 3 img 모두 완료 후 latch.
+// top : Recursive PU-based SRCNN 4_2. 단일 PU 가 layer_cnt 로 L1/L2/L3 시분할.
+//   - 단일 PU 인스턴스 (PU.v)
+//   - weight BRAM 64bit x 35 word (L1 + L2 + L3 weights + bias)
+//   - input BRAM 16bit x 67500 word (3 img concat, img당 22500 offset)
+//   - URAM_L1 4뱅크 + URAM_L2 2뱅크 (img 간 재사용)
+//   - 4 packer (PU 의 4-ch 병렬 출력 → URAM_L1[0..3] / URAM_L2[oc] / final)
+//     L1: packer 4 개 모두 활성 (oc 0..3 → URAM_L1[0..3])
+//     L2: packer[0] 만 활성 (출력 slot0 → URAM_L2[out_ch_cnt])
+//     L3: packer[0] 만 활성 (출력 slot0 → final output)
+//   - o_img_done : 매 img L3 완료 시 1-clk pulse
+//   - o_all_done : 3 img 모두 완료 후 latch
 module top #(
     parameter MEM_ADDR = 17,
     parameter URAM_AW  = 13,
@@ -21,11 +24,11 @@ module top #(
     output wire [15:0] o_pixel_data
 );
     // ------------------------------------------------------------------
-    // FSM
+    // FSM signals
     // ------------------------------------------------------------------
     wire                       w_w_rd_en;
     wire [MEM_ADDR-1:0]        w_w_rd_addr;
-    wire                       w_bias_en_fsm;
+    wire                       w_bias_en;
     wire                       w_i_rd_en;
     wire [MEM_ADDR-1:0]        w_i_rd_addr;
     wire                       w_intermid_uram_rd_en;
@@ -41,46 +44,43 @@ module top #(
     wire                       w_out_ch_cnt;
     wire [1:0]                 w_img_cnt;
 
-    // packer pulses (per-layer)
-    wire [3:0]                 w_pack_L1_we;
-    wire [4*64-1:0]            w_pack_L1_dout_flat;
-    wire                       w_pack_L2_we;
-    wire [63:0]                w_pack_L2_dout;
-    wire                       w_pack_L3_we;
-    wire [63:0]                w_pack_L3_dout;
+    // PU outputs
+    wire                       w_pu_pixel_valid;
+    wire [4*16-1:0]            w_pu_pixel_data;
+    wire                       w_pu_img_done;
 
-    // adder/pe done (FSM 에 layer-specific 신호 라우팅)
-    wire                       w_L1_img_done;
-    wire                       w_L2_img_done;
-    wire                       w_L3_img_done;
+    // Packer signals (4 packers, layer 별 활성 분기)
+    wire [3:0]                 w_pack_we;
+    wire [4*64-1:0]            w_pack_dout_flat;
 
-    wire w_active_pe_done_raw =
-        (w_layer_cnt == 2'd0) ? w_L1_img_done :
-        (w_layer_cnt == 2'd1) ? w_L2_img_done :
-                                w_L3_img_done;
-    // PU 의 pe_done 은 pipeline 산수 끝단에서 +3clk 가량인데, packer 의 마지막
-    // pack_we 가 그것보다 더 뒤에 발사된다. layer_cnt advance 전에 모든 pack_we
-    // 가 URAM 에 commit 되도록 추가 지연.
+    // active pack pulse for FSM (layer 별 1 채널 선택)
+    //   L1: 4 packer 동시 → 어느 하나 (예: [0]) 사용 (모두 같은 clk).
+    //   L2: packer[0]
+    //   L3: packer[0]
+    wire w_active_wr_pulse = w_pack_we[0];
+
+    // ------------------------------------------------------------------
+    // FSM : pe_done 은 PU.o_img_done + 추가 지연 (packer commit 대기)
+    // ------------------------------------------------------------------
     wire w_active_pe_done;
     delay_shift #(.DELAY(6)) u_pe_done_dly (
-        .clk(i_clk), .rst(~i_rstn), .en(1'b1),
-        .din(w_active_pe_done_raw), .dout(w_active_pe_done)
+        .clk  (i_clk),
+        .rst  (~i_rstn),
+        .en   (1'b1),
+        .din  (w_pu_img_done),
+        .dout (w_active_pe_done)
     );
-    wire w_active_wr_pulse =
-        (w_layer_cnt == 2'd0) ? w_pack_L1_we[0] :
-        (w_layer_cnt == 2'd1) ? w_pack_L2_we     :
-                                w_pack_L3_we;
 
     FSM_pad #(.MEM_ADDR_WIDTH(MEM_ADDR), .NPIX_IMG(NPIX_IMG)) u_fsm (
         .i_clk                   (i_clk),
         .i_rstn                  (i_rstn),
         .i_start                 (i_start),
-        .i_line_img_done         (1'b0),                // 미사용 (PU 가 자체 처리)
+        .i_line_img_done         (1'b0),                // 미사용
         .i_pe_done               (w_active_pe_done),
         .i_uram_we               (w_active_wr_pulse),
         .o_w_rd_en               (w_w_rd_en),
         .o_w_rd_addr             (w_w_rd_addr),
-        .o_bias_en               (w_bias_en_fsm),
+        .o_bias_en               (w_bias_en),
         .o_i_rd_en               (w_i_rd_en),
         .o_i_rd_addr             (w_i_rd_addr),
         .o_intermid_uram_rd_en   (w_intermid_uram_rd_en),
@@ -117,9 +117,6 @@ module top #(
         .rd_dout  (w_w_dout)
     );
 
-    // bias_en pulse 는 1clk 후 BRAM dout 안착과 정렬 (FSM 에서 이미 정렬됨)
-    wire w_bias_en = w_bias_en_fsm;
-
     wire                w_i_rd_valid;
     wire signed [15:0]  w_i_dout;
     simple_dual_port_bram #(
@@ -136,14 +133,14 @@ module top #(
     );
 
     // ------------------------------------------------------------------
-    // URAMs (uram_L1[0..3], uram_L2[0..1])
+    // URAMs
     // ------------------------------------------------------------------
     wire [63:0]         w_uram_L1_dout    [0:3];
     wire                w_uram_L1_rd_valid[0:3];
     wire [63:0]         w_uram_L2_dout    [0:1];
     wire                w_uram_L2_rd_valid[0:1];
 
-    // write addr counter per layer (공유)
+    // write addr counter (layer 공유)
     reg [URAM_AW-1:0]   r_wr_addr;
     always @(posedge i_clk or negedge i_rstn) begin
         if (~i_rstn)             r_wr_addr <= 0;
@@ -151,7 +148,6 @@ module top #(
         else if (w_active_wr_pulse) r_wr_addr <= r_wr_addr + 1'b1;
     end
 
-    // L1 URAM write: layer==0 일 때 4 채널 동시 (각 pack_L1_we[g])
     genvar b;
     generate
         for (b = 0; b < 4; b = b + 1) begin : gen_uram_L1
@@ -159,9 +155,9 @@ module top #(
                 .WIDTH(64), .DEPTH(8192), .INIT_FILE("")
             ) u_uram_L1 (
                 .clk      (i_clk),
-                .wr_en    ((w_layer_cnt == 2'd0) && w_pack_L1_we[b]),
+                .wr_en    ((w_layer_cnt == 2'd0) && w_pack_we[b]),
                 .wr_addr  (r_wr_addr),
-                .wr_din   (w_pack_L1_dout_flat[64*b +: 64]),
+                .wr_din   (w_pack_dout_flat[64*b +: 64]),
                 .rd_en    ((w_layer_cnt == 2'd1) && w_intermid_uram_rd_en),
                 .rd_addr  (w_intermid_uram_rd_addr[URAM_AW-1:0]),
                 .rd_valid (w_uram_L1_rd_valid[b]),
@@ -173,9 +169,9 @@ module top #(
                 .WIDTH(64), .DEPTH(8192), .INIT_FILE("")
             ) u_uram_L2 (
                 .clk      (i_clk),
-                .wr_en    ((w_layer_cnt == 2'd1) && (w_out_ch_cnt == b[0]) && w_pack_L2_we),
+                .wr_en    ((w_layer_cnt == 2'd1) && (w_out_ch_cnt == b[0]) && w_pack_we[0]),
                 .wr_addr  (r_wr_addr),
-                .wr_din   (w_pack_L2_dout),
+                .wr_din   (w_pack_dout_flat[0 +: 64]),
                 .rd_en    ((w_layer_cnt == 2'd2) && w_intermid_uram_rd_en),
                 .rd_addr  (w_intermid_uram_rd_addr[URAM_AW-1:0]),
                 .rd_valid (w_uram_L2_rd_valid[b]),
@@ -185,7 +181,7 @@ module top #(
     endgenerate
 
     // ------------------------------------------------------------------
-    // FIFOs (4 for L1->L2, 2 for L2->L3) — 64bit din, 16bit dout
+    // FIFOs (L1->L2 4개, L2->L3 2개)
     // ------------------------------------------------------------------
     wire signed [15:0] w_fifo_L1_dout [0:3];
     wire signed [15:0] w_fifo_L2_dout [0:1];
@@ -222,117 +218,72 @@ module top #(
     endgenerate
 
     // ------------------------------------------------------------------
-    // L1_PU (1 in_ch, 4 out_ch) — 활성: layer_cnt==0
+    // PU 입력 라우팅 (layer 별)
+    //   L1: input BRAM (pad mux 통해), ch_data slot 0 (= bits[63:48]) 만 의미.
+    //       PU 내부에서 ch0 을 4 line_buffer 에 broadcast 함.
+    //   L2: 4 FIFO (L1->L2) 의 출력 4 채널 packed.
+    //   L3: 2 FIFO (L2->L3) 의 출력 2 채널 packed (slot 0,1).
     // ------------------------------------------------------------------
-    wire signed [15:0] w_L1_in_data;
-    wire               w_L1_in_valid;
-    assign w_L1_in_data  = w_is_pad_valid ? 16'sd0 : w_i_dout;
-    // L1_PU 는 layer_cnt==0 일 때만 input valid. 다른 layer 에서 pad-valid 펄스가
-    // 새는 것을 막아 packer fifo_cnt 가 drift 하지 않도록.
-    assign w_L1_in_valid = (w_layer_cnt == 2'd0) &&
-                           (w_is_pad_valid ? 1'b1 : w_i_rd_valid);
+    wire signed [15:0] w_L1_in_data  = w_is_pad_valid ? 16'sd0 : w_i_dout;
+    wire               w_L1_in_valid = w_is_pad_valid ? 1'b1   : w_i_rd_valid;
 
-    wire [4*16-1:0]    w_L1_pixels;
-    wire               w_L1_pixel_valid;
-    L1_PU u_L1 (
+    wire [4*16-1:0] w_pu_ch_data =
+        (w_layer_cnt == 2'd0) ? {w_L1_in_data, 48'd0} :
+        (w_layer_cnt == 2'd1) ? {w_fifo_L1_dout[0], w_fifo_L1_dout[1],
+                                  w_fifo_L1_dout[2], w_fifo_L1_dout[3]} :
+                                 {w_fifo_L2_dout[0], w_fifo_L2_dout[1], 32'd0};
+
+    wire w_pu_input_valid =
+        (w_layer_cnt == 2'd0) ? w_L1_in_valid :
+                                w_fifo_valid;
+
+    // ------------------------------------------------------------------
+    // 단일 PU 인스턴스
+    // ------------------------------------------------------------------
+    PU u_pu (
         .i_clk          (i_clk),
         .i_rstn         (i_rstn),
         .i_IDLE_rst     (w_IDLE_rst),
-        .i_input_valid  (w_L1_in_valid),
-        .i_pixel_data   (w_L1_in_data),
-        .i_w_rd_valid   (w_w_rd_valid && (w_layer_cnt == 2'd0)),
-        .i_bias_en      (w_bias_en && (w_layer_cnt == 2'd0)),
-        .i_w_word       (w_w_dout),
         .i_dispatch_rst (w_dispatch_rst),
-        .o_pixel_valid  (w_L1_pixel_valid),
-        .o_pixel_data   (w_L1_pixels),
-        .o_img_done     (w_L1_img_done)
+        .i_layer_cnt    (w_layer_cnt),
+        .i_out_ch_cnt   (w_out_ch_cnt),
+        .i_input_valid  (w_pu_input_valid),
+        .i_ch_data      (w_pu_ch_data),
+        .i_is_pad_valid (w_is_pad_valid),
+        .i_w_rd_valid   (w_w_rd_valid),
+        .i_w_word       (w_w_dout),
+        .i_bias_en      (w_bias_en),
+        .o_pixel_valid  (w_pu_pixel_valid),
+        .o_pixel_data   (w_pu_pixel_data),
+        .o_img_done     (w_pu_img_done)
     );
 
-    // L1 출력 → 4 packer (ch별 spatial 4-pix word)
+    // ------------------------------------------------------------------
+    // 4 packer
+    //   L1: 각 packer[g] 가 PU 출력 slot g 를 받음. 모두 동일 valid.
+    //   L2/L3: packer[0] 만 PU 출력 slot 0 받음. packer[1..3] 비활성.
+    // ------------------------------------------------------------------
+    wire w_packer_en_layer1plus = (w_layer_cnt != 2'd0);
+
     generate
-        for (b = 0; b < 4; b = b + 1) begin : gen_pack_L1
+        for (b = 0; b < 4; b = b + 1) begin : gen_pack
+            wire en_b = (b == 0) ? w_pu_pixel_valid
+                                 : (w_pu_pixel_valid && (w_layer_cnt == 2'd0));
+            wire signed [15:0] data_b = w_pu_pixel_data[16*((4-1)-b) +: 16];
             fifo_add_to_uram u_pack (
                 .i_clk         (i_clk),
                 .i_rstn        (i_rstn),
-                .i_fifo_en     (w_L1_pixel_valid),
-                .i_data        (w_L1_pixels[16*((4-1)-b) +: 16]),
-                .o_output_uram (w_pack_L1_dout_flat[64*b +: 64]),
-                .o_uram_we     (w_pack_L1_we[b])
+                .i_fifo_en     (en_b),
+                .i_data        (data_b),
+                .o_output_uram (w_pack_dout_flat[64*b +: 64]),
+                .o_uram_we     (w_pack_we[b])
             );
         end
     endgenerate
 
     // ------------------------------------------------------------------
-    // L2_PU (4 in_ch, 2 out_ch time-mux) — 활성: layer_cnt==1
-    // ------------------------------------------------------------------
-    wire [4*16-1:0] w_L2_in_concat = {
-        w_fifo_L1_dout[0], w_fifo_L1_dout[1], w_fifo_L1_dout[2], w_fifo_L1_dout[3]
-    };
-    wire signed [15:0] w_L2_pixel;
-    wire               w_L2_pixel_valid;
-    L2_PU u_L2 (
-        .i_clk          (i_clk),
-        .i_rstn         (i_rstn),
-        .i_IDLE_rst     (w_IDLE_rst),
-        .i_dispatch_rst (w_dispatch_rst),
-        .i_ch_valid     (w_fifo_valid && (w_layer_cnt == 2'd1)),
-        .i_ch_data      (w_L2_in_concat),
-        .i_is_pad_valid (w_is_pad_valid && (w_layer_cnt == 2'd1)),
-        .i_w_rd_valid   (w_w_rd_valid && (w_layer_cnt == 2'd1)),
-        .i_bias_en      (w_bias_en && (w_layer_cnt == 2'd1)),
-        .i_w_word       (w_w_dout),
-        .i_out_ch_cnt   (w_out_ch_cnt),
-        .o_pixel_valid  (w_L2_pixel_valid),
-        .o_pixel_data   (w_L2_pixel),
-        .o_img_done     (w_L2_img_done)
-    );
-
-    fifo_add_to_uram u_pack_L2 (
-        .i_clk         (i_clk),
-        .i_rstn        (i_rstn),
-        .i_fifo_en     (w_L2_pixel_valid),
-        .i_data        (w_L2_pixel),
-        .o_output_uram (w_pack_L2_dout),
-        .o_uram_we     (w_pack_L2_we)
-    );
-
-    // ------------------------------------------------------------------
-    // L3_PU (2 in_ch, 1 out_ch) — 활성: layer_cnt==2
-    // ------------------------------------------------------------------
-    wire [2*16-1:0] w_L3_in_concat = {
-        w_fifo_L2_dout[0], w_fifo_L2_dout[1]
-    };
-    wire signed [15:0] w_L3_pixel;
-    wire               w_L3_pixel_valid;
-    L3_PU u_L3 (
-        .i_clk          (i_clk),
-        .i_rstn         (i_rstn),
-        .i_IDLE_rst     (w_IDLE_rst),
-        .i_dispatch_rst (w_dispatch_rst),
-        .i_ch_valid     (w_fifo_valid && (w_layer_cnt == 2'd2)),
-        .i_ch_data      (w_L3_in_concat),
-        .i_is_pad_valid (w_is_pad_valid && (w_layer_cnt == 2'd2)),
-        .i_w_rd_valid   (w_w_rd_valid && (w_layer_cnt == 2'd2)),
-        .i_bias_en      (w_bias_en && (w_layer_cnt == 2'd2)),
-        .i_w_word       (w_w_dout),
-        .o_pixel_valid  (w_L3_pixel_valid),
-        .o_pixel_data   (w_L3_pixel),
-        .o_img_done     (w_L3_img_done)
-    );
-
-    fifo_add_to_uram u_pack_L3 (
-        .i_clk         (i_clk),
-        .i_rstn        (i_rstn),
-        .i_fifo_en     (w_L3_pixel_valid),
-        .i_data        (w_L3_pixel),
-        .o_output_uram (w_pack_L3_dout),
-        .o_uram_we     (w_pack_L3_we)
-    );
-
-    // ------------------------------------------------------------------
     // 최종 출력 (L3 stream)
     // ------------------------------------------------------------------
-    assign o_pixel_valid = w_L3_pixel_valid;
-    assign o_pixel_data  = w_L3_pixel;
+    assign o_pixel_valid = (w_layer_cnt == 2'd2) ? w_pu_pixel_valid : 1'b0;
+    assign o_pixel_data  = w_pu_pixel_data[48 +: 16];
 endmodule

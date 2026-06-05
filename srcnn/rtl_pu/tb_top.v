@@ -51,37 +51,37 @@ module tb_top;
 
     integer ich;
 
-    // L1 capture
+    // L1 capture (layer==0, packer[0..3] 동시)
     always @(posedge clk) begin
         if (!rstn) cap_L1_idx <= 0;
-        else if (dut.w_layer_cnt == 2'd0 && dut.w_pack_L1_we[0]) begin
+        else if (dut.w_layer_cnt == 2'd0 && dut.w_pack_we[0]) begin
             for (ich = 0; ich < 4; ich = ich + 1) begin
-                cap_L1[(cur_img*4 + ich)*NPIX + cap_L1_idx + 0] <= pix_of(dut.w_pack_L1_dout_flat[64*ich +: 64], 2'd0);
-                cap_L1[(cur_img*4 + ich)*NPIX + cap_L1_idx + 1] <= pix_of(dut.w_pack_L1_dout_flat[64*ich +: 64], 2'd1);
-                cap_L1[(cur_img*4 + ich)*NPIX + cap_L1_idx + 2] <= pix_of(dut.w_pack_L1_dout_flat[64*ich +: 64], 2'd2);
-                cap_L1[(cur_img*4 + ich)*NPIX + cap_L1_idx + 3] <= pix_of(dut.w_pack_L1_dout_flat[64*ich +: 64], 2'd3);
+                cap_L1[(cur_img*4 + ich)*NPIX + cap_L1_idx + 0] <= pix_of(dut.w_pack_dout_flat[64*ich +: 64], 2'd0);
+                cap_L1[(cur_img*4 + ich)*NPIX + cap_L1_idx + 1] <= pix_of(dut.w_pack_dout_flat[64*ich +: 64], 2'd1);
+                cap_L1[(cur_img*4 + ich)*NPIX + cap_L1_idx + 2] <= pix_of(dut.w_pack_dout_flat[64*ich +: 64], 2'd2);
+                cap_L1[(cur_img*4 + ich)*NPIX + cap_L1_idx + 3] <= pix_of(dut.w_pack_dout_flat[64*ich +: 64], 2'd3);
             end
             cap_L1_idx <= cap_L1_idx + 4;
         end
     end
 
-    // L2 capture
+    // L2 capture (layer==1, packer[0])
     always @(posedge clk) begin
         if (!rstn) begin
             cap_L2_oc0_idx <= 0;
             cap_L2_oc1_idx <= 0;
-        end else if (dut.w_layer_cnt == 2'd1 && dut.w_pack_L2_we) begin
+        end else if (dut.w_layer_cnt == 2'd1 && dut.w_pack_we[0]) begin
             if (dut.w_out_ch_cnt == 1'b0) begin
-                cap_L2[(cur_img*2 + 0)*NPIX + cap_L2_oc0_idx + 0] <= pix_of(dut.w_pack_L2_dout, 2'd0);
-                cap_L2[(cur_img*2 + 0)*NPIX + cap_L2_oc0_idx + 1] <= pix_of(dut.w_pack_L2_dout, 2'd1);
-                cap_L2[(cur_img*2 + 0)*NPIX + cap_L2_oc0_idx + 2] <= pix_of(dut.w_pack_L2_dout, 2'd2);
-                cap_L2[(cur_img*2 + 0)*NPIX + cap_L2_oc0_idx + 3] <= pix_of(dut.w_pack_L2_dout, 2'd3);
+                cap_L2[(cur_img*2 + 0)*NPIX + cap_L2_oc0_idx + 0] <= pix_of(dut.w_pack_dout_flat[0 +: 64], 2'd0);
+                cap_L2[(cur_img*2 + 0)*NPIX + cap_L2_oc0_idx + 1] <= pix_of(dut.w_pack_dout_flat[0 +: 64], 2'd1);
+                cap_L2[(cur_img*2 + 0)*NPIX + cap_L2_oc0_idx + 2] <= pix_of(dut.w_pack_dout_flat[0 +: 64], 2'd2);
+                cap_L2[(cur_img*2 + 0)*NPIX + cap_L2_oc0_idx + 3] <= pix_of(dut.w_pack_dout_flat[0 +: 64], 2'd3);
                 cap_L2_oc0_idx <= cap_L2_oc0_idx + 4;
             end else begin
-                cap_L2[(cur_img*2 + 1)*NPIX + cap_L2_oc1_idx + 0] <= pix_of(dut.w_pack_L2_dout, 2'd0);
-                cap_L2[(cur_img*2 + 1)*NPIX + cap_L2_oc1_idx + 1] <= pix_of(dut.w_pack_L2_dout, 2'd1);
-                cap_L2[(cur_img*2 + 1)*NPIX + cap_L2_oc1_idx + 2] <= pix_of(dut.w_pack_L2_dout, 2'd2);
-                cap_L2[(cur_img*2 + 1)*NPIX + cap_L2_oc1_idx + 3] <= pix_of(dut.w_pack_L2_dout, 2'd3);
+                cap_L2[(cur_img*2 + 1)*NPIX + cap_L2_oc1_idx + 0] <= pix_of(dut.w_pack_dout_flat[0 +: 64], 2'd0);
+                cap_L2[(cur_img*2 + 1)*NPIX + cap_L2_oc1_idx + 1] <= pix_of(dut.w_pack_dout_flat[0 +: 64], 2'd1);
+                cap_L2[(cur_img*2 + 1)*NPIX + cap_L2_oc1_idx + 2] <= pix_of(dut.w_pack_dout_flat[0 +: 64], 2'd2);
+                cap_L2[(cur_img*2 + 1)*NPIX + cap_L2_oc1_idx + 3] <= pix_of(dut.w_pack_dout_flat[0 +: 64], 2'd3);
                 cap_L2_oc1_idx <= cap_L2_oc1_idx + 4;
             end
         end

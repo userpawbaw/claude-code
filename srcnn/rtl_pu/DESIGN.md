@@ -1,7 +1,10 @@
-# SRCNN 4_2 — PU-based redesign
+# SRCNN 4_2 — Recursive PU redesign
 
-PU 단위로 line_buffer + pe_group + adder_tree + bias + (선택적)ReLU + Q7.8 clipping
-을 통합한 새 RTL. 3-이미지 연속 처리, layer_cnt-제어 bias/ReLU, weight 매-img 재로드.
+**단일 PU** 가 `i_layer_cnt` 로 모드 전환하면서 L1/L2/L3 를 시분할 처리. PU 내부에
+line_buffer + pe_group + adder_tree + bias + (layer 별)ReLU + Q7.8 refine 통합.
+3-이미지 연속 처리, weight 매-img 재로드.
+
+자세한 인터페이스/파이프라인은 `HANDOFF.md` 참조.
 
 ## Channel 구조 (preset 4_2, 변경 없음)
 - L1: 1 in_ch → 4 out_ch  (3×3, ReLU)
