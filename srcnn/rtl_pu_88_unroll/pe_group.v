@@ -1,9 +1,10 @@
 `timescale 1ns / 1ps
-// pe_group : 3x3 conv PE 9개 + 공간 adder tree (1 in_ch).
-//   weight 인터페이스: i_weight (16bit) 공통 + i_w_tap_en[8:0] (one-hot tap 선택)
-//   output: o_partial (36-bit signed Q16.16) = 9-tap 공간합 + valid + pe_done
-//   PE 가 full Q16.16 (32-bit) 곱셈을 그대로 흘려보내므로 본 adder tree 도
-//   Q16.16 누적. Q8.8 변환/saturation 은 상위 PU 의 출력 stage 에서 수행.
+// pe_group : 3x3 conv, 9 PE + spatial adder tree (1 in_ch).
+//   weight interface : i_weight (16-bit) shared + i_w_tap_en[8:0] one-hot tap.
+//   output           : o_partial (32-bit signed Q16.16) = 9-tap spatial sum.
+//   PE produces full Q16.16 (32-bit) product without truncation;
+//   adder tree keeps Q16.16. Q8.8 truncation / saturation happens in PU.
+
 module pe_group (
     input  wire                 i_clk,
     input  wire                 i_rstn,
@@ -12,15 +13,15 @@ module pe_group (
     input  wire [16*9-1:0]      i_line_data,
 
     input  wire signed [15:0]   i_weight,
-    input  wire [8:0]           i_w_tap_en,    // one-hot per tap
+    input  wire [8:0]           i_w_tap_en,
 
     input  wire                 i_line_img_done,
     output reg                  o_valid,
-    output reg  signed [35:0]   o_partial,     // ★ Q16.16 (9 × 32-bit 합, 36-bit safe)
+    output reg  signed [31:0]   o_partial,
     output wire                 o_pe_done
 );
     wire            pe_valid;
-    wire [32*9-1:0] pe_output;                 // ★ 9 × 32-bit Q16.16
+    wire [32*9-1:0] pe_output;
 
     genvar i;
     generate
@@ -38,11 +39,9 @@ module pe_group (
         end
     endgenerate
 
-    // adder tree: 9 → 3 → 1  (Q16.16 그대로 누적)
-    //   stage1: 3-input 합 × 3 → 34-bit (32 + ceil(log2 3) = 34)
-    //   stage2: 3-input 합     → 36-bit
+    // adder tree : 9 -> 3 -> 1 (Q16.16, 32-bit unified)
     reg               adder_val1;
-    reg signed [33:0] r_add_stage1 [2:0];
+    reg signed [31:0] r_add_stage1 [2:0];
 
     integer j;
     always @(posedge i_clk or negedge i_rstn) begin
