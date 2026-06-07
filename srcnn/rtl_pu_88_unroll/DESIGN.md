@@ -93,3 +93,25 @@ line_buffer.o_img_done → pe_group.o_pe_done (+3) → PU.o_img_done (+3, Stage 
   3 img 각각 golden_L1 / golden_L2 / golden_out 생성.
 - `tb_top.v` : 3 img 연속 처리, img_done 펄스마다 cap 인덱스 layer-wise 누적.
 - iverilog 회귀 ALL PASS (L1 540K + L2 540K + OUT 67.5K, 0 errors).
+
+## line_buffer_wide (8-px unroll) 슬라이스 규약
+3-line buffer 를 row 경계 없는 연속 stream 으로 취급. 8-px shift 마다 윈도우는
+10-px 폭을 유지하면서 입력의 8 col 단위로 정렬된 출력을 만든다.
+
+- 슬라이스 위치 : `r_lineX[(WIN_COL+SHIFT_STEP-1)*DATA_BIT-1 : (SHIFT_STEP-1)*DATA_BIT]`
+  = bits `[271:112]` (10 px, 160 bit).
+- 슬라이스 내 정렬 : `win[9]` (MSB) = 가장 왼쪽 col (= row-start emit 의 "col -1"),
+  `win[0]` (LSB) = 가장 오른쪽 col (= 최신 word 의 freshest pixel).
+- emit 스케줄 (출력 row r ∈ [1..150]):
+    * `word_cnt = 1..18` of 입력 row (r+1) → 출력 col 0..143 of out_row r.
+    * `word_cnt = 0`     of 입력 row (r+2) → 출력 col 144..151 of out_row r.
+  ⇒ 출력 row 150 의 마지막 8 col 을 뽑으려면 L1 stream 끝에 dummy zero word
+  1 개 추가 필요 (= FSM 가 `WORDS_PER_ROW*IMG_HEIGHT + 1` 사이클 stream).
+- lane-0 mask (내부에서 처리) :
+    * row-start emit (`r_col_word == 1`) 시점에서 각 row 슬라이스의 `win[9]` 자리
+      는 이전 row 의 잔존 데이터를 들고 있으므로, 강제 0 출력 (= conv lane 0
+      의 left-column input 0 = col -1 padding).
+- lane-7 mask 불필요 :
+    * boundary emit (`r_col_word == 0`) 시점의 `win[0]` 자리는 다음 row 의 col 0
+      = 0 (사전 padding 됨). 따라서 conv lane 7 의 right-column input 은 자연
+      스럽게 0.
