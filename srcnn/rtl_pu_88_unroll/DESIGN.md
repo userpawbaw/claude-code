@@ -115,3 +115,26 @@ line_buffer.o_img_done → pe_group.o_pe_done (+3) → PU.o_img_done (+3, Stage 
     * boundary emit (`r_col_word == 0`) 시점의 `win[0]` 자리는 다음 row 의 col 0
       = 0 (사전 padding 됨). 따라서 conv lane 7 의 right-column input 은 자연
       스럽게 0.
+
+## line_buffer_wide_l3 (L3 4-px unroll) 슬라이스 규약
+L3 (8 in_ch → 1 out_ch) 는 출력이 64-bit (= 4 px × 16 b) 만 사용하면 URAM word
+폭에 정확히 맞으므로 **4-way unroll** 만 수행. L1/L2 가 576 PE 를 쓰는 동안
+L3 는 그 절반 (288 PE = 8 ic × 9 tap × 4 lane) 만 가동.
+
+별도 라인 버퍼 `line_buffer_wide_l3` 사용 (3×6 윈도우, 4-px shift).
+
+- 슬라이스 위치 : `r_lineX[WIN_BITS-1:0]` = bits `[95:0]` (6 px, LSB-anchored).
+- 슬라이스 내 정렬 (per row, MSB→LSB pixel) :
+    * pixel 5 = col 4K-2,  pixel 4 = col 4K-1,
+    * pixel 3 = col 4K,    pixel 2 = col 4K+1,
+    * pixel 1 = col 4K+2,  pixel 0 = col 4K+3.
+- Lane → out col 매핑 (word_cnt K of input row R, 출력 row r = R-1) :
+    * `lane k → out col (4K - 2 + k)`,  k ∈ [0..3].
+- emit 스케줄 (출력 row r ∈ [1..150]) :
+    * `word_cnt = 0`     of 입력 row (r+1) → `lane_valid = 4'b1100` (lanes 2,3 = out cols 0, 1).
+    * `word_cnt = 1..37` of 입력 row (r+1) → `lane_valid = 4'b1111` (cols 4K-2..4K+1).
+  ⇒ 행당 38 emit, 2 + 37×4 = 150 col. Boundary emit / dummy word 불필요.
+- "col -1" slot (= slice pixel 4 at K=0) 은 이전 row 의 col 151 = L2 출력의
+  right-pad 0. 자연 0 이므로 conv lane 2 의 left-column input 별도 mask 없음.
+- `o_lane_valid` (4 bit) 출력으로 packer 가 `lane_valid` 보고 4-px URAM word
+  로 모음 ({32'h0, output[31:0]} ↔ word_cnt=0 패턴).
