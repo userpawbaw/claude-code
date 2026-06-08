@@ -72,37 +72,46 @@ module tb_top;
         end
     endfunction
 
-    // L1 capture : layer==0, packer[0..7] 동시 (8 oc).
+    // L1 capture : layer==0, pack_we OR pad_wr_en (= URAM wr_addr advances).
+    //   pad_wr_en → 0 data, pack_we → real PU emit.
     always @(posedge clk) begin
         if (!rstn) cap_L1_idx <= 0;
-        else if (dut.w_layer_cnt == 2'd0 && dut.w_pack_we[0]) begin
-            for (ich = 0; ich < OC1; ich = ich + 1) begin
-                cap_L1[(cur_img*OC1 + ich)*PIX_PER_CH + cap_L1_idx + 0] <= px_in_word(dut.w_pack_dout_flat[128*ich +: 128], 0);
-                cap_L1[(cur_img*OC1 + ich)*PIX_PER_CH + cap_L1_idx + 1] <= px_in_word(dut.w_pack_dout_flat[128*ich +: 128], 1);
-                cap_L1[(cur_img*OC1 + ich)*PIX_PER_CH + cap_L1_idx + 2] <= px_in_word(dut.w_pack_dout_flat[128*ich +: 128], 2);
-                cap_L1[(cur_img*OC1 + ich)*PIX_PER_CH + cap_L1_idx + 3] <= px_in_word(dut.w_pack_dout_flat[128*ich +: 128], 3);
-                cap_L1[(cur_img*OC1 + ich)*PIX_PER_CH + cap_L1_idx + 4] <= px_in_word(dut.w_pack_dout_flat[128*ich +: 128], 4);
-                cap_L1[(cur_img*OC1 + ich)*PIX_PER_CH + cap_L1_idx + 5] <= px_in_word(dut.w_pack_dout_flat[128*ich +: 128], 5);
-                cap_L1[(cur_img*OC1 + ich)*PIX_PER_CH + cap_L1_idx + 6] <= px_in_word(dut.w_pack_dout_flat[128*ich +: 128], 6);
-                cap_L1[(cur_img*OC1 + ich)*PIX_PER_CH + cap_L1_idx + 7] <= px_in_word(dut.w_pack_dout_flat[128*ich +: 128], 7);
+        else if (dut.w_layer_cnt == 2'd0
+                 && (dut.w_pack_we[0] || dut.w_pad_wr_en)) begin
+            for (ich = 0; ich < OC1; ich = ich + 1) begin : cap_L1_loop
+                reg [127:0] w128;
+                w128 = dut.w_pad_wr_en ? 128'h0
+                                       : dut.w_pack_dout_flat[128*ich +: 128];
+                cap_L1[(cur_img*OC1 + ich)*PIX_PER_CH + cap_L1_idx + 0] <= px_in_word(w128, 0);
+                cap_L1[(cur_img*OC1 + ich)*PIX_PER_CH + cap_L1_idx + 1] <= px_in_word(w128, 1);
+                cap_L1[(cur_img*OC1 + ich)*PIX_PER_CH + cap_L1_idx + 2] <= px_in_word(w128, 2);
+                cap_L1[(cur_img*OC1 + ich)*PIX_PER_CH + cap_L1_idx + 3] <= px_in_word(w128, 3);
+                cap_L1[(cur_img*OC1 + ich)*PIX_PER_CH + cap_L1_idx + 4] <= px_in_word(w128, 4);
+                cap_L1[(cur_img*OC1 + ich)*PIX_PER_CH + cap_L1_idx + 5] <= px_in_word(w128, 5);
+                cap_L1[(cur_img*OC1 + ich)*PIX_PER_CH + cap_L1_idx + 6] <= px_in_word(w128, 6);
+                cap_L1[(cur_img*OC1 + ich)*PIX_PER_CH + cap_L1_idx + 7] <= px_in_word(w128, 7);
             end
             cap_L1_idx <= cap_L1_idx + 8;
         end
     end
 
-    // L2 capture : layer==1, packer[0] only, oc per out_ch_cnt.
+    // L2 capture : layer==1, pack_we[0] OR pad_wr_en, oc per out_ch_cnt.
     always @(posedge clk) begin
         if (!rstn) begin
             for (kk = 0; kk < OC2; kk = kk + 1) cap_L2_idx[kk] <= 0;
-        end else if (dut.w_layer_cnt == 2'd1 && dut.w_pack_we[0]) begin
-            cap_L2[(cur_img*OC2 + dut.w_out_ch_cnt)*PIX_PER_CH + cap_L2_idx[dut.w_out_ch_cnt] + 0] <= px_in_word(dut.w_pack_dout_flat[0 +: 128], 0);
-            cap_L2[(cur_img*OC2 + dut.w_out_ch_cnt)*PIX_PER_CH + cap_L2_idx[dut.w_out_ch_cnt] + 1] <= px_in_word(dut.w_pack_dout_flat[0 +: 128], 1);
-            cap_L2[(cur_img*OC2 + dut.w_out_ch_cnt)*PIX_PER_CH + cap_L2_idx[dut.w_out_ch_cnt] + 2] <= px_in_word(dut.w_pack_dout_flat[0 +: 128], 2);
-            cap_L2[(cur_img*OC2 + dut.w_out_ch_cnt)*PIX_PER_CH + cap_L2_idx[dut.w_out_ch_cnt] + 3] <= px_in_word(dut.w_pack_dout_flat[0 +: 128], 3);
-            cap_L2[(cur_img*OC2 + dut.w_out_ch_cnt)*PIX_PER_CH + cap_L2_idx[dut.w_out_ch_cnt] + 4] <= px_in_word(dut.w_pack_dout_flat[0 +: 128], 4);
-            cap_L2[(cur_img*OC2 + dut.w_out_ch_cnt)*PIX_PER_CH + cap_L2_idx[dut.w_out_ch_cnt] + 5] <= px_in_word(dut.w_pack_dout_flat[0 +: 128], 5);
-            cap_L2[(cur_img*OC2 + dut.w_out_ch_cnt)*PIX_PER_CH + cap_L2_idx[dut.w_out_ch_cnt] + 6] <= px_in_word(dut.w_pack_dout_flat[0 +: 128], 6);
-            cap_L2[(cur_img*OC2 + dut.w_out_ch_cnt)*PIX_PER_CH + cap_L2_idx[dut.w_out_ch_cnt] + 7] <= px_in_word(dut.w_pack_dout_flat[0 +: 128], 7);
+        end else if (dut.w_layer_cnt == 2'd1
+                     && (dut.w_pack_we[0] || dut.w_pad_wr_en)) begin : cap_L2_blk
+            reg [127:0] w128;
+            w128 = dut.w_pad_wr_en ? 128'h0
+                                   : dut.w_pack_dout_flat[0 +: 128];
+            cap_L2[(cur_img*OC2 + dut.w_out_ch_cnt)*PIX_PER_CH + cap_L2_idx[dut.w_out_ch_cnt] + 0] <= px_in_word(w128, 0);
+            cap_L2[(cur_img*OC2 + dut.w_out_ch_cnt)*PIX_PER_CH + cap_L2_idx[dut.w_out_ch_cnt] + 1] <= px_in_word(w128, 1);
+            cap_L2[(cur_img*OC2 + dut.w_out_ch_cnt)*PIX_PER_CH + cap_L2_idx[dut.w_out_ch_cnt] + 2] <= px_in_word(w128, 2);
+            cap_L2[(cur_img*OC2 + dut.w_out_ch_cnt)*PIX_PER_CH + cap_L2_idx[dut.w_out_ch_cnt] + 3] <= px_in_word(w128, 3);
+            cap_L2[(cur_img*OC2 + dut.w_out_ch_cnt)*PIX_PER_CH + cap_L2_idx[dut.w_out_ch_cnt] + 4] <= px_in_word(w128, 4);
+            cap_L2[(cur_img*OC2 + dut.w_out_ch_cnt)*PIX_PER_CH + cap_L2_idx[dut.w_out_ch_cnt] + 5] <= px_in_word(w128, 5);
+            cap_L2[(cur_img*OC2 + dut.w_out_ch_cnt)*PIX_PER_CH + cap_L2_idx[dut.w_out_ch_cnt] + 6] <= px_in_word(w128, 6);
+            cap_L2[(cur_img*OC2 + dut.w_out_ch_cnt)*PIX_PER_CH + cap_L2_idx[dut.w_out_ch_cnt] + 7] <= px_in_word(w128, 7);
             cap_L2_idx[dut.w_out_ch_cnt] <= cap_L2_idx[dut.w_out_ch_cnt] + 8;
         end
     end
