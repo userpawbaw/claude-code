@@ -129,9 +129,11 @@ module FSM_pad #(
     wire       w_last_oc     = (r_layer_cnt == 2'd1) && (r_out_ch_cnt == 3'd7);
 
     // stream length per layer
-    localparam STREAM_L1_LEN = NPIX_IMG + 16'd1;    // 2888 + 1 dummy
-    localparam STREAM_L2_LEN = NPIX_IMG + 16'd1;    // same
-    localparam STREAM_L3_LEN = NPIX_IMG * 16'd2;    // 5776 (every-other-clk URAM read)
+    //  L1/L2 : NPIX_IMG (= 2888) read cycles + 1 idle gap (last rd_valid) + 1 dummy = 2890.
+    //  L3    : NPIX_IMG × 2 = 5776 cycles (URAM every-other-clk).
+    localparam STREAM_L1_LEN = NPIX_IMG + 16'd2;    // 2890
+    localparam STREAM_L2_LEN = NPIX_IMG + 16'd2;    // 2890
+    localparam STREAM_L3_LEN = NPIX_IMG * 16'd2;    // 5776
 
     wire [CNT_WIDTH-1:0] w_stream_len =
         (r_layer_cnt == 2'd2) ? STREAM_L3_LEN :
@@ -283,22 +285,23 @@ module FSM_pad #(
                     r_stream_cnt <= r_stream_cnt + 1'b1;
 
                     case (r_layer_cnt)
-                        2'd0 : begin // L1 : BRAM 128b read every clk.
+                        2'd0 : begin // L1 : BRAM 128b read at cnt 0..2887, dummy at cnt 2889.
                             if (r_stream_cnt < NPIX_IMG) begin
                                 o_i_rd_en   <= 1'b1;
                                 o_i_rd_addr <= r_img_cnt * NPIX_IMG + r_bram_addr;
                                 r_bram_addr <= r_bram_addr + 1'b1;
-                            end else begin
+                            end else if (r_stream_cnt == NPIX_IMG + 1) begin
                                 o_input_dummy_valid <= 1'b1;
                             end
+                            // cnt == NPIX_IMG : idle (last rd_valid arrives this cycle).
                         end
 
-                        2'd1 : begin // L2 : URAM_L1 read every clk × 8 banks parallel.
+                        2'd1 : begin // L2 : URAM_L1 read at cnt 0..2887, dummy at cnt 2889.
                             if (r_stream_cnt < NPIX_IMG) begin
                                 o_intermid_uram_rd_en   <= 1'b1;
                                 o_intermid_uram_rd_addr <= r_uram_addr;
                                 r_uram_addr             <= r_uram_addr + 1'b1;
-                            end else begin
+                            end else if (r_stream_cnt == NPIX_IMG + 1) begin
                                 o_input_dummy_valid <= 1'b1;
                             end
                         end

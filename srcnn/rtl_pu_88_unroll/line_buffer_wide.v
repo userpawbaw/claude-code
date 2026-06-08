@@ -160,13 +160,14 @@ module line_buffer_wide #(
             o_img_done     <= 0;
             o_lane_valid   <= 0;
         end else begin
-            r_valid        <= w_valid_in_window;
-            r_done         <= w_done_in_window;
-            r_mask_lane0   <= w_valid_in_window && (r_col_word == 1);
-            r_lane_valid   <= w_valid_in_window ? w_lane_valid_full : {LANE_NUM{1'b0}};
+            // emit only when new shift just happened (= i_input_valid this cycle)
+            r_valid        <= i_input_valid && w_valid_in_window;
+            r_done         <= i_input_valid && w_done_in_window;
+            r_mask_lane0   <= i_input_valid && w_valid_in_window && (r_col_word == 1);
+            r_lane_valid   <= (i_input_valid && w_valid_in_window) ? w_lane_valid_full : {LANE_NUM{1'b0}};
             o_line_valid   <= r_valid;
             o_line_rd_done <= r_done;
-            o_img_done     <= w_img_done;
+            o_img_done     <= i_input_valid && w_img_done;
             o_lane_valid   <= r_lane_valid;
         end
     end
