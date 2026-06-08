@@ -120,41 +120,45 @@ module tb_lb_wide_l3;
 
     always @(posedge clk) begin
         if (wvalid) begin
-            // out_cnt = 0 : word_cnt=0 of input row 2
-            //   Bottom slice px 0..5 = {row2 col3, col2, col1, col0,
-            //                            row1 col151, row1 col150}.
+            // out_cnt = 0 : word_cnt=0 of input row 2.
+            //   Bottom slice covers cols [-3..2] = {row1 col149, col150, col151,
+            //                                       row2 col0, col1, col2}.
+            //   slice px 0 (LSB, newest) = col 2 of row 2.
+            //   slice px 5 (MSB, oldest) = col 149 of row 1.
             //   lane_valid = 4'b1100.
             if (out_cnt == 0) begin
                 check_lane(4'b1100, 0);
-                check_eq(0, 0, img[2][3],   1);
-                check_eq(0, 1, img[2][2],   2);
-                check_eq(0, 2, img[2][1],   3);
-                check_eq(0, 3, img[2][0],   4);   // = 0 (left pad)
-                check_eq(0, 4, img[1][151], 5);   // = 0 (right pad of prev row)
-                check_eq(0, 5, img[1][150], 6);
-                check_eq(1, 0, img[1][3],   7);
-                check_eq(1, 3, img[1][0],   8);
-                check_eq(2, 0, img[0][3],   9);
-                check_eq(2, 3, img[0][0],  10);
+                check_eq(0, 0, img[2][2],   1);
+                check_eq(0, 1, img[2][1],   2);
+                check_eq(0, 2, img[2][0],   3);   // = 0 (left pad)
+                check_eq(0, 3, img[1][151], 4);   // = 0 (prev row right pad)
+                check_eq(0, 4, img[1][150], 5);
+                check_eq(0, 5, img[1][149], 6);
+                check_eq(1, 0, img[1][2],   7);
+                check_eq(1, 2, img[1][0],   8);
+                check_eq(2, 0, img[0][2],   9);
+                check_eq(2, 2, img[0][0],  10);
             end
 
-            // out_cnt = 1 : word_cnt=1, bottom slice = row2 cols {7,6,5,4,3,2}.
+            // out_cnt = 1 : word_cnt=1, bottom slice covers cols [1..6] of row 2.
+            //   slice px 0 = col 6, slice px 5 = col 1.
             if (out_cnt == 1) begin
                 check_lane(4'b1111, 20);
-                check_eq(0, 0, img[2][7], 21);
-                check_eq(0, 3, img[2][4], 22);
-                check_eq(0, 4, img[2][3], 23);
-                check_eq(0, 5, img[2][2], 24);
+                check_eq(0, 0, img[2][6], 21);
+                check_eq(0, 3, img[2][3], 22);
+                check_eq(0, 4, img[2][2], 23);
+                check_eq(0, 5, img[2][1], 24);
             end
 
-            // out_cnt = 37 : word_cnt=37, bottom slice = row2 cols {151..146}.
+            // out_cnt = 37 : word_cnt=37, bottom slice covers cols [145..150].
+            //   slice px 0 = col 150, slice px 5 = col 145.
             if (out_cnt == 37) begin
                 check_lane(4'b1111, 40);
-                check_eq(0, 0, img[2][151], 41);   // = 0 (right pad)
-                check_eq(0, 1, img[2][150], 42);
-                check_eq(0, 3, img[2][148], 43);
-                check_eq(0, 4, img[2][147], 44);
-                check_eq(0, 5, img[2][146], 45);
+                check_eq(0, 0, img[2][150], 41);
+                check_eq(0, 1, img[2][149], 42);
+                check_eq(0, 3, img[2][147], 43);
+                check_eq(0, 4, img[2][146], 44);
+                check_eq(0, 5, img[2][145], 45);
             end
 
             out_cnt <= out_cnt + 1;

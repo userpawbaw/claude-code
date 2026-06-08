@@ -123,18 +123,21 @@ L3 는 그 절반 (288 PE = 8 ic × 9 tap × 4 lane) 만 가동.
 
 별도 라인 버퍼 `line_buffer_wide_l3` 사용 (3×6 윈도우, 4-px shift).
 
-- 슬라이스 위치 : `r_lineX[WIN_BITS-1:0]` = bits `[95:0]` (6 px, LSB-anchored).
+- 슬라이스 위치 : `r_lineX[WIN_BITS+DATA_BIT-1 : DATA_BIT]` = bits `[111:16]`
+  (6 px, 1-px shifted from LSB). 슬라이스가 `[4K-3 .. 4K+2]` 6 col 커버.
 - 슬라이스 내 정렬 (per row, MSB→LSB pixel) :
-    * pixel 5 = col 4K-2,  pixel 4 = col 4K-1,
-    * pixel 3 = col 4K,    pixel 2 = col 4K+1,
-    * pixel 1 = col 4K+2,  pixel 0 = col 4K+3.
+    * pixel 5 = col 4K-3,  pixel 4 = col 4K-2,
+    * pixel 3 = col 4K-1,  pixel 2 = col 4K,
+    * pixel 1 = col 4K+1,  pixel 0 = col 4K+2.
 - Lane → out col 매핑 (word_cnt K of input row R, 출력 row r = R-1) :
     * `lane k → out col (4K - 2 + k)`,  k ∈ [0..3].
+- 3×3 conv 입력 (lane k, slice px 5=MSB 가장 오래된 col, 0=LSB 최신 col) :
+    * left = win[5-k], center = win[4-k], right = win[3-k].
 - emit 스케줄 (출력 row r ∈ [1..150]) :
     * `word_cnt = 0`     of 입력 row (r+1) → `lane_valid = 4'b1100` (lanes 2,3 = out cols 0, 1).
     * `word_cnt = 1..37` of 입력 row (r+1) → `lane_valid = 4'b1111` (cols 4K-2..4K+1).
   ⇒ 행당 38 emit, 2 + 37×4 = 150 col. Boundary emit / dummy word 불필요.
-- "col -1" slot (= slice pixel 4 at K=0) 은 이전 row 의 col 151 = L2 출력의
-  right-pad 0. 자연 0 이므로 conv lane 2 의 left-column input 별도 mask 없음.
+- "col -1" slot at K=0 (= slice win[3], from previous row's col 151) 은 L2
+  출력의 right-pad 0. 자연 0 이므로 conv lane 2 의 left-column input 별도 mask 없음.
 - `o_lane_valid` (4 bit) 출력으로 packer 가 `lane_valid` 보고 4-px URAM word
   로 모음 ({32'h0, output[31:0]} ↔ word_cnt=0 패턴).
