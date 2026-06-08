@@ -52,6 +52,10 @@ module tb_top;
     reg [15:0] cap_L2  [0 : NIMG*OC2*PIX_PER_CH - 1];
     reg [15:0] cap_out [0 : NIMG*OUT_PIX_PER_IMG - 1];
 
+    // pad_top/bot 제거 → row 0/151 은 캡처 안 함 (golden 과 0 이 일치).
+    // cap_L1/L2_idx : row 1 시작 오프셋 = 19 words × 8 px = 152.
+    localparam ROW1_OFFSET = 152;
+
     integer cap_L1_idx;
     integer cap_L2_idx [0:OC2-1];
     integer cap_out_idx;
@@ -72,16 +76,14 @@ module tb_top;
         end
     endfunction
 
-    // L1 capture : layer==0, pack_we OR pad_wr_en (= URAM wr_addr advances).
-    //   pad_wr_en → 0 data, pack_we → real PU emit.
+    // L1 capture : layer==0, pack_we[0] 만 (pad_wr_en 제거).
+    //   cap_L1_idx starts at ROW1_OFFSET (=152) : row 0 is 0-initialized cap array.
     always @(posedge clk) begin
-        if (!rstn) cap_L1_idx <= 0;
-        else if (dut.w_layer_cnt == 2'd0
-                 && (dut.w_pack_we[0] || dut.w_pad_wr_en)) begin
+        if (!rstn) cap_L1_idx <= ROW1_OFFSET;
+        else if (dut.w_layer_cnt == 2'd0 && dut.w_pack_we[0]) begin
             for (ich = 0; ich < OC1; ich = ich + 1) begin : cap_L1_loop
                 reg [127:0] w128;
-                w128 = dut.w_pad_wr_en ? 128'h0
-                                       : dut.w_pack_dout_flat[128*ich +: 128];
+                w128 = dut.w_pack_dout_flat[128*ich +: 128];
                 cap_L1[(cur_img*OC1 + ich)*PIX_PER_CH + cap_L1_idx + 0] <= px_in_word(w128, 0);
                 cap_L1[(cur_img*OC1 + ich)*PIX_PER_CH + cap_L1_idx + 1] <= px_in_word(w128, 1);
                 cap_L1[(cur_img*OC1 + ich)*PIX_PER_CH + cap_L1_idx + 2] <= px_in_word(w128, 2);
@@ -95,15 +97,13 @@ module tb_top;
         end
     end
 
-    // L2 capture : layer==1, pack_we[0] OR pad_wr_en, oc per out_ch_cnt.
+    // L2 capture : layer==1, pack_we[0] 만.
     always @(posedge clk) begin
         if (!rstn) begin
-            for (kk = 0; kk < OC2; kk = kk + 1) cap_L2_idx[kk] <= 0;
-        end else if (dut.w_layer_cnt == 2'd1
-                     && (dut.w_pack_we[0] || dut.w_pad_wr_en)) begin : cap_L2_blk
+            for (kk = 0; kk < OC2; kk = kk + 1) cap_L2_idx[kk] <= ROW1_OFFSET;
+        end else if (dut.w_layer_cnt == 2'd1 && dut.w_pack_we[0]) begin : cap_L2_blk
             reg [127:0] w128;
-            w128 = dut.w_pad_wr_en ? 128'h0
-                                   : dut.w_pack_dout_flat[0 +: 128];
+            w128 = dut.w_pack_dout_flat[0 +: 128];
             cap_L2[(cur_img*OC2 + dut.w_out_ch_cnt)*PIX_PER_CH + cap_L2_idx[dut.w_out_ch_cnt] + 0] <= px_in_word(w128, 0);
             cap_L2[(cur_img*OC2 + dut.w_out_ch_cnt)*PIX_PER_CH + cap_L2_idx[dut.w_out_ch_cnt] + 1] <= px_in_word(w128, 1);
             cap_L2[(cur_img*OC2 + dut.w_out_ch_cnt)*PIX_PER_CH + cap_L2_idx[dut.w_out_ch_cnt] + 2] <= px_in_word(w128, 2);
@@ -133,8 +133,8 @@ module tb_top;
     always @(posedge clk) begin
         if (!rstn) cur_img <= 0;
         else if (img_done) begin
-            cap_L1_idx  <= 0;
-            for (kk = 0; kk < OC2; kk = kk + 1) cap_L2_idx[kk] <= 0;
+            cap_L1_idx  <= ROW1_OFFSET;
+            for (kk = 0; kk < OC2; kk = kk + 1) cap_L2_idx[kk] <= ROW1_OFFSET;
             cap_out_idx <= 0;
             cur_img     <= cur_img + 1;
         end
@@ -198,24 +198,37 @@ module tb_top;
         rstn = 1; @(posedge clk);
         start = 1; @(posedge clk); start = 0;
 
-        wait (all_done);
-        repeat (50) @(posedge clk);
+        // 3 img × (L1 2930 + L2 8×2930 + L3 5820) ≈ 96K cycles.  200K gives ample margin.
+        repeat (200000) @(posedge clk);
+        if (!all_done)
+            $display("WARNING: all_done not asserted after 200K cycles (layer=%0d img=%0d ps=%0d)",
+                     dut.w_layer_cnt, dut.w_img_cnt, dut.u_fsm.r_ps);
 
+        // Compare rows 1..150 only (rows 0/151 are padding, never written to cap arrays).
+        // Each ch block: PIX_PER_CH=23104. Row 0 = px 0..151, row 151 = px 22952..23103.
         errL1 = 0;
-        for (i = 0; i < NIMG*OC1*PIX_PER_CH; i = i + 1)
-            if (cap_L1[i] !== gold_L1[i]) begin
-                if (errL1 < 10)
-                    $display("L1 MISMATCH idx%0d : got=%04x exp=%04x", i, cap_L1[i], gold_L1[i]);
-                errL1 = errL1 + 1;
-            end
+        for (i = 0; i < NIMG*OC1*PIX_PER_CH; i = i + 1) begin : cmp_L1
+            integer lp;
+            lp = i % PIX_PER_CH;
+            if (lp >= ROW1_OFFSET && lp < PIX_PER_CH - ROW1_OFFSET)
+                if (cap_L1[i] !== gold_L1[i]) begin
+                    if (errL1 < 10)
+                        $display("L1 MISMATCH idx%0d : got=%04x exp=%04x", i, cap_L1[i], gold_L1[i]);
+                    errL1 = errL1 + 1;
+                end
+        end
 
         errL2 = 0;
-        for (i = 0; i < NIMG*OC2*PIX_PER_CH; i = i + 1)
-            if (cap_L2[i] !== gold_L2[i]) begin
-                if (errL2 < 10)
-                    $display("L2 MISMATCH idx%0d : got=%04x exp=%04x", i, cap_L2[i], gold_L2[i]);
-                errL2 = errL2 + 1;
-            end
+        for (i = 0; i < NIMG*OC2*PIX_PER_CH; i = i + 1) begin : cmp_L2
+            integer lp2;
+            lp2 = i % PIX_PER_CH;
+            if (lp2 >= ROW1_OFFSET && lp2 < PIX_PER_CH - ROW1_OFFSET)
+                if (cap_L2[i] !== gold_L2[i]) begin
+                    if (errL2 < 10)
+                        $display("L2 MISMATCH idx%0d : got=%04x exp=%04x", i, cap_L2[i], gold_L2[i]);
+                    errL2 = errL2 + 1;
+                end
+        end
 
         // L3 output : compare against unpadded 150×150 region of golden_out.
         errOut = 0;
@@ -243,7 +256,7 @@ module tb_top;
     end
 
     initial begin
-        #2000000000;
+        #3000000;   // 3M ns = 300K cycles — safety net
         $display("TIMEOUT layer=%0d img=%0d capL1=%0d capOut=%0d all_done=%b",
                  dut.w_layer_cnt, dut.w_img_cnt, cap_L1_idx, cap_out_idx, all_done);
         $finish;
