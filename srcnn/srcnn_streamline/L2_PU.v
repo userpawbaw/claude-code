@@ -159,10 +159,9 @@ module L2_PU #(
 
     // =========================================================================
     // [5] img_done propagation (for FSM)
-    //   pe_group 2 + ch adder tree 3 + bias+output 2 = 7clk
     // =========================================================================
     delay_shift #(
-        .DELAY(2+3+2)
+        .DELAY(3+3+2)
     ) d3_line_buff_done_to_PU (
         .clk(i_clk),
         .rst(~i_rstn),

@@ -171,10 +171,10 @@ module L3_PU #(
 
     // --------------------------------------------------------
     // [5] img_done propagation (for FSM i_adder_done)
-    //  pipeline: pe_group 2 + adder tree 2 + bias+output 2 = 6clk
+    //  pipeline: pe_group 3 + adder tree 2 + bias+output 2 = 7clk
     // --------------------------------------------------------
     delay_shift #(
-        .DELAY(2+2+2)
+        .DELAY(3+2+2)
     ) d_l3_img_done (
         .clk(i_clk),
         .rst(~i_rstn),
