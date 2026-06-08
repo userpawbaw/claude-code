@@ -148,7 +148,7 @@ module top #(
     wire [127:0]        w_uram_L2_dout    [0:MAX_CH-1];
     wire                w_uram_L2_rd_valid[0:MAX_CH-1];
 
-    // URAM wr_en (per bank) : pack_we OR pad_wr_en. wr_din muxed to 0 during pad.
+    // URAM wr_en (per bank) : pack_we only. pad_wr_en removed (URAM auto-init=0).
     wire w_uram_L1_wr_en [0:MAX_CH-1];
     wire w_uram_L2_wr_en [0:MAX_CH-1];
     wire [127:0] w_uram_L1_wr_din [0:MAX_CH-1];
@@ -157,24 +157,23 @@ module top #(
     genvar b;
     generate
         for (b = 0; b < MAX_CH; b = b + 1) begin : gen_wr_mux
-            assign w_uram_L1_wr_en[b]   = (w_layer_cnt == 2'd0)
-                                         && (w_pack_we[b] || w_pad_wr_en);
-            assign w_uram_L1_wr_din[b]  = w_pad_wr_en ? 128'h0
-                                                       : w_pack_dout_flat[128*b +: 128];
-            assign w_uram_L2_wr_en[b]   = (w_layer_cnt == 2'd1)
+            assign w_uram_L1_wr_en[b]  = (w_layer_cnt == 2'd0) && w_pack_we[b];
+            assign w_uram_L1_wr_din[b] = w_pack_dout_flat[128*b +: 128];
+            assign w_uram_L2_wr_en[b]  = (w_layer_cnt == 2'd1)
                                          && (w_out_ch_cnt == b[2:0])
-                                         && (w_pack_we[0] || w_pad_wr_en);
+                                         && w_pack_we[0];
         end
     endgenerate
-    assign w_uram_L2_wr_din = w_pad_wr_en ? 128'h0 : w_pack_dout_flat[0 +: 128];
+    assign w_uram_L2_wr_din = w_pack_dout_flat[0 +: 128];
 
-    // wr_addr advances on either pack_we[0] or pad_wr_en.
-    wire w_wr_advance = w_pack_we[0] || w_pad_wr_en;
+    // wr_addr : reset to WORDS_PER_ROW (=19) so row 0 (addr 0..18) stays 0 from URAM init.
+    localparam WORDS_PER_ROW = 19;
+    wire w_wr_advance = w_pack_we[0];
 
     reg [URAM_AW-1:0]   r_wr_addr;
     always @(posedge i_clk or negedge i_rstn) begin
         if (~i_rstn)              r_wr_addr <= 0;
-        else if (w_wr_addr_rst)   r_wr_addr <= 0;
+        else if (w_wr_addr_rst)   r_wr_addr <= WORDS_PER_ROW[URAM_AW-1:0];
         else if (w_wr_advance)    r_wr_addr <= r_wr_addr + 1'b1;
     end
 
@@ -232,13 +231,18 @@ module top #(
             r_l3_in_valid <= 0;
         end else if (w_layer_cnt == 2'd2) begin
             // capture URAM read result (1-clk read latency).
+            // r_l3_in_valid only rises after the first rd_valid so no spurious
+            // zero-word is injected before real data arrives.
             if (w_uram_L2_rd_valid[0]) begin
                 for (hi = 0; hi < MAX_CH; hi = hi + 1) r_l3_word[hi] <= w_uram_L2_dout[hi];
-                r_l3_half <= 0;        // newly captured word → present upper half.
+                r_l3_half     <= 0;
+                r_l3_in_valid <= 1'b1;   // present upper half
+            end else if (r_l3_in_valid && r_l3_half == 1'b0) begin
+                r_l3_half     <= 1;
+                r_l3_in_valid <= 1'b1;   // present lower half
             end else begin
-                r_l3_half <= ~r_l3_half;
+                r_l3_in_valid <= 1'b0;   // waiting for next URAM word
             end
-            r_l3_in_valid <= 1'b1;
         end else begin
             r_l3_in_valid <= 1'b0;
         end

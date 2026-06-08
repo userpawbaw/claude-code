@@ -1,36 +1,22 @@
 `timescale 1ns / 1ps
-// FSM_pad (preset 8_8 UNROLL, rewrite for full unroll datapath).
+// FSM_pad (preset 8_8 UNROLL, no pad_top/bot states).
 //
 // 단계별 시퀀스 (per layer / pass) :
-//   S_IDLE → S_W_READ → S_PAD_TOP → S_I_STREAM → S_DRAIN → S_PAD_BOT → S_DONE
+//   S_IDLE → S_W_READ → S_I_STREAM → S_DRAIN → S_DONE
 //
-//   S_W_READ : weight 9 + bias 1 = 10 cycle 로딩.
-//              L1 : addr 0..8 + 9    (oc 8 슬롯 동시)
-//              L2 : addr 10+oc*9 .. + 8  + 82 (bias 공유)
-//              L3 : addr 83..91 + 92
-//   S_PAD_TOP : 19 cycle. o_pad_wr_en=1 → top.v 가 URAM_L1[..]/URAM_L2[oc] addr 0..18 에 0 write.
+//   S_W_READ   : weight 9 + bias 1 = 10 cycle 로딩.
+//                L1 : addr 0..8 + 9    (oc 8 슬롯 동시)
+//                L2 : addr 10+oc*9 .. + 8  + 82 (bias 공유)
+//                L3 : addr 83..91 + 92
 //   S_I_STREAM :
-//              L1 : BRAM read 2888 cycle (addr base + 0..2887) + 1 dummy.
-//              L2 : URAM_L1 read 2888 cycle + 1 dummy.
-//              L3 : URAM_L2 read every-other clk × 2888 reads = 5776 cycle.
-//                   매 URAM read 은 depacker (top.v) 가 upper/lower 64b 로 2 cycle 분할.
-//   S_DRAIN : PU pipeline + line_buffer 까지 8~12 cycle 정도. 충분히 30 cycle 대기.
-//   S_PAD_BOT : 19 cycle. addr 2869..2887 에 0 write.
-//   S_DONE : i_pe_done (= delay_shift(6) of PU.o_img_done) 대기 → 다음 layer/pass.
+//                L1 : BRAM read 2888 cycle (addr base + 0..2887) + 1 dummy.
+//                L2 : URAM_L1 read 2888 cycle + 1 dummy.
+//                L3 : URAM_L2 read every-other clk × 2888 reads = 5776 cycle.
+//   S_DRAIN    : 30 cycle 대기 후 i_pe_done 수신.
+//   S_DONE     : reset pulse 발생 → 다음 layer/pass.
 //
-// L2 시퀀스 : 8 oc 시분할 — 각 oc 마다 위 시퀀스 1 회. 다음 oc 으로 갈 때 weight 재 load
-//             (lut_w_base = 10 + oc*9). bias 는 addr 82 마다.
-//
-// 출력 :
-//   o_w_rd_en / o_w_rd_addr    : weight BRAM read.
-//   o_bias_en                  : bias latch pulse (1 cycle, S_W_READ 의 bias slot).
-//   o_i_rd_en / o_i_rd_addr    : input BRAM read (L1 만).
-//   o_intermid_uram_rd_en /
-//   o_intermid_uram_rd_addr    : URAM_L1 read (L2) / URAM_L2 read (L3).
-//   o_input_dummy_valid        : (NEW) L1/L2 의 dummy cycle 또는 L3 의 toggle 사이 valid 신호.
-//   o_pad_wr_en                : S_PAD_TOP / S_PAD_BOT 동안 1.
-//   o_IDLE_rst / o_dispatch_rst / o_wr_addr_rst : reset pulse 신호.
-//   o_layer_cnt / o_out_ch_cnt / o_img_cnt / o_img_done / o_all_done.
+// Note : pad_top/bot 제거. URAM auto-init=0 이므로 row 0/151 은 항상 0.
+//        top.v 에서 wr_addr 를 19 (WORDS_PER_ROW) 부터 시작시켜 row 1..150 만 기록.
 
 module FSM_pad #(
     parameter PAD            = 1,
@@ -60,8 +46,8 @@ module FSM_pad #(
     output reg [MEM_ADDR_WIDTH-3:0]     o_intermid_uram_rd_addr,
 
     output reg                          o_fifo_rd_en,        // unused (kept for compat)
-    output reg                          o_input_dummy_valid, // NEW: input_valid w/ zero data
-    output reg                          o_pad_wr_en,         // NEW: URAM padding write enable
+    output reg                          o_input_dummy_valid,
+    output reg                          o_pad_wr_en,         // always 0 (kept for compat)
 
     output reg                          o_IDLE_rst,
     output reg                          o_dispatch_rst,
@@ -78,11 +64,9 @@ module FSM_pad #(
 );
     localparam S_IDLE     = 3'd0;
     localparam S_W_READ   = 3'd1;
-    localparam S_PAD_TOP  = 3'd2;
-    localparam S_I_STREAM = 3'd3;
-    localparam S_DRAIN    = 3'd4;
-    localparam S_PAD_BOT  = 3'd5;
-    localparam S_DONE     = 3'd6;
+    localparam S_I_STREAM = 3'd2;
+    localparam S_DRAIN    = 3'd3;
+    localparam S_DONE     = 3'd4;
 
     reg [2:0] r_ps, r_ns;
 
@@ -91,12 +75,11 @@ module FSM_pad #(
     reg [1:0]                r_img_cnt;
     reg                      r_bias_pre;
     reg [6:0]                r_word_idx;
-    reg [CNT_WIDTH-1:0]      r_pad_cnt;
     reg [CNT_WIDTH-1:0]      r_stream_cnt;
     reg [CNT_WIDTH-1:0]      r_drain_cnt;
     reg [MEM_ADDR_WIDTH-1:0] r_bram_addr;
     reg [MEM_ADDR_WIDTH-3:0] r_uram_addr;
-    reg                      r_l3_toggle;       // for L3 every-other-clk URAM read
+    reg                      r_l3_toggle;
 
     assign o_layer_cnt  = r_layer_cnt;
     assign o_out_ch_cnt = r_out_ch_cnt;
@@ -129,8 +112,6 @@ module FSM_pad #(
     wire       w_last_oc     = (r_layer_cnt == 2'd1) && (r_out_ch_cnt == 3'd7);
 
     // stream length per layer
-    //  L1/L2 : NPIX_IMG (= 2888) read cycles + 1 idle gap (last rd_valid) + 1 dummy = 2890.
-    //  L3    : NPIX_IMG × 2 = 5776 cycles (URAM every-other-clk).
     localparam STREAM_L1_LEN = NPIX_IMG + 16'd2;    // 2890
     localparam STREAM_L2_LEN = NPIX_IMG + 16'd2;    // 2890
     localparam STREAM_L3_LEN = NPIX_IMG * 16'd2;    // 5776
@@ -139,9 +120,7 @@ module FSM_pad #(
         (r_layer_cnt == 2'd2) ? STREAM_L3_LEN :
         (r_layer_cnt == 2'd1) ? STREAM_L2_LEN : STREAM_L1_LEN;
 
-    localparam DRAIN_LEN  = 16'd30;
-    localparam PAD_LEN_L1L2 = 16'd19;       // 19 col_words per row
-    localparam PAD_LEN_L3   = 16'd0;        // L3 stores 150×150 unpadded; no URAM write here
+    localparam DRAIN_LEN = 16'd30;
 
     // ------------------------------------------------------------------
     // state register
@@ -163,29 +142,16 @@ module FSM_pad #(
                     r_ns = S_W_READ;
             S_W_READ :
                 if (r_word_idx >= w_total_words)
-                    r_ns = S_PAD_TOP;
-            S_PAD_TOP :
-                if (r_pad_cnt == PAD_LEN_L1L2 - 1) begin
-                    if (r_layer_cnt == 2'd2) r_ns = S_I_STREAM;   // L3 has no pad
-                    else                     r_ns = S_I_STREAM;
-                end else if (r_layer_cnt == 2'd2) begin
-                    r_ns = S_I_STREAM;                            // skip pad for L3
-                end
+                    r_ns = S_I_STREAM;
             S_I_STREAM :
                 if (r_stream_cnt >= w_stream_len - 1)
                     r_ns = S_DRAIN;
             S_DRAIN :
-                // PU pipeline 끝 = i_pe_done pulse. 도착하면 다음 단계.
-                if (i_pe_done) begin
-                    if (r_layer_cnt == 2'd2) r_ns = S_DONE;       // L3 : no bot pad
-                    else                     r_ns = S_PAD_BOT;
-                end
-            S_PAD_BOT :
-                if (r_pad_cnt == PAD_LEN_L1L2 - 1)
+                if (i_pe_done)
                     r_ns = S_DONE;
             S_DONE :
-                if (o_all_done)     r_ns = S_DONE;
-                else                r_ns = S_IDLE;                // 바로 진행 (pe_done 은 S_DRAIN 에서 체크)
+                if (o_all_done) r_ns = S_DONE;
+                else            r_ns = S_IDLE;
             default: r_ns = S_IDLE;
         endcase
     end
@@ -200,7 +166,6 @@ module FSM_pad #(
             r_img_cnt               <= 0;
             r_word_idx              <= 0;
             r_bias_pre              <= 0;
-            r_pad_cnt               <= 0;
             r_stream_cnt            <= 0;
             r_drain_cnt             <= 0;
             r_bram_addr             <= 0;
@@ -237,16 +202,14 @@ module FSM_pad #(
             o_is_pad              <= 0;
             o_is_pad_valid        <= 0;
             o_input_dummy_valid   <= 0;
-            o_pad_wr_en           <= 0;
+            o_pad_wr_en           <= 0;   // always 0
 
-            // bias_en : delayed by 1 cycle from r_bias_pre.
             o_bias_en  <= r_bias_pre;
             r_bias_pre <= 1'b0;
 
             case (r_ps)
                 S_IDLE : begin
                     r_word_idx   <= 0;
-                    r_pad_cnt    <= 0;
                     r_stream_cnt <= 0;
                     r_drain_cnt  <= 0;
                     r_bram_addr  <= 0;
@@ -271,21 +234,11 @@ module FSM_pad #(
                     end
                 end
 
-                S_PAD_TOP : begin
-                    if (r_layer_cnt == 2'd2) begin
-                        r_pad_cnt <= 0;       // L3 skip
-                    end else begin
-                        o_pad_wr_en <= 1'b1;
-                        if (r_pad_cnt == PAD_LEN_L1L2 - 1) r_pad_cnt <= 0;
-                        else                                 r_pad_cnt <= r_pad_cnt + 1'b1;
-                    end
-                end
-
                 S_I_STREAM : begin
                     r_stream_cnt <= r_stream_cnt + 1'b1;
 
                     case (r_layer_cnt)
-                        2'd0 : begin // L1 : BRAM 128b read at cnt 0..2887, dummy at cnt 2889.
+                        2'd0 : begin // L1 : BRAM read cnt 0..2887, dummy at cnt 2889.
                             if (r_stream_cnt < NPIX_IMG) begin
                                 o_i_rd_en   <= 1'b1;
                                 o_i_rd_addr <= r_img_cnt * NPIX_IMG + r_bram_addr;
@@ -293,10 +246,9 @@ module FSM_pad #(
                             end else if (r_stream_cnt == NPIX_IMG + 1) begin
                                 o_input_dummy_valid <= 1'b1;
                             end
-                            // cnt == NPIX_IMG : idle (last rd_valid arrives this cycle).
                         end
 
-                        2'd1 : begin // L2 : URAM_L1 read at cnt 0..2887, dummy at cnt 2889.
+                        2'd1 : begin // L2 : URAM_L1 read cnt 0..2887, dummy at cnt 2889.
                             if (r_stream_cnt < NPIX_IMG) begin
                                 o_intermid_uram_rd_en   <= 1'b1;
                                 o_intermid_uram_rd_addr <= r_uram_addr;
@@ -322,17 +274,10 @@ module FSM_pad #(
                     r_drain_cnt <= r_drain_cnt + 1'b1;
                 end
 
-                S_PAD_BOT : begin
-                    o_pad_wr_en <= 1'b1;
-                    if (r_pad_cnt == PAD_LEN_L1L2 - 1) r_pad_cnt <= 0;
-                    else                                 r_pad_cnt <= r_pad_cnt + 1'b1;
-                end
-
                 S_DONE : begin
                     o_IDLE_rst     <= 1'b1;
                     o_dispatch_rst <= 1'b1;
                     r_word_idx     <= 0;
-                    r_pad_cnt      <= 0;
                     r_stream_cnt   <= 0;
                     r_drain_cnt    <= 0;
                     r_bram_addr    <= 0;
@@ -340,7 +285,6 @@ module FSM_pad #(
                     r_l3_toggle    <= 0;
 
                     if (r_layer_cnt == 2'd1 && !w_last_oc) begin
-                        // next L2 pass : same layer, next oc.
                         r_out_ch_cnt <= r_out_ch_cnt + 1'b1;
                     end else if (!w_last_layer) begin
                         r_layer_cnt  <= r_layer_cnt + 2'd1;

@@ -110,7 +110,9 @@ module line_buffer_wide_l3 #(
     // -----------------------------------------------------------------
     wire w_valid_in_window = (r_row >= WIN_ROW - 1) && (r_row <= ROW_LAST_IN);
     wire w_done_in_window  = (r_row >= WIN_ROW - 1) && (r_col_word == WORDS_PER_ROW - 1);
-    wire w_img_done        = (r_row == IMG_WIDTH);
+    // Fire on the last word of the last row (row 151, col_word 37) so that
+    // exactly 5776 inputs are required instead of needing a 5777th dummy pulse.
+    wire w_img_done = (r_row == IMG_WIDTH - 1) && (r_col_word == WORDS_PER_ROW - 1);
 
     wire [LANE_NUM-1:0] w_lane_valid_full =
         (r_col_word == 0) ? 4'b1100 : 4'b1111;
