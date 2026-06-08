@@ -116,6 +116,7 @@ module PU #(
     wire [L3_BITS-1:0]   w_lb_l3_in     [0:MAX_CH-1];
 
     wire [WIN_SIZE_WIDE-1:0] w_lb_wide_data [0:MAX_CH-1];
+    wire [LANES_WIDE-1:0]    w_lb_wide_lane_v[0:MAX_CH-1];
     wire                     w_lb_wide_valid [0:MAX_CH-1];
     wire                     w_lb_wide_done  [0:MAX_CH-1];
     wire                     w_lb_wide_imgd  [0:MAX_CH-1];
@@ -144,7 +145,7 @@ module PU #(
             // line_buffer_wide (3×10, 8-px shift) — active L1/L2.
             line_buffer_wide #(
                 .IMG_WIDTH(152), .WIN_ROW(3), .WIN_COL(10),
-                .SHIFT_STEP(8), .DATA_BIT(16)
+                .SHIFT_STEP(8), .DATA_BIT(16), .LANE_NUM(LANES_WIDE)
             ) u_lb_wide (
                 .i_clk          (i_clk),
                 .i_rstn         (i_rstn),
@@ -152,6 +153,7 @@ module PU #(
                 .i_input_valid  (i_input_valid && !w_is_L3),
                 .i_input_data   (w_lb_wide_in[g]),
                 .o_line_data    (w_lb_wide_data[g]),
+                .o_lane_valid   (w_lb_wide_lane_v[g]),
                 .o_line_valid   (w_lb_wide_valid[g]),
                 .o_line_rd_done (w_lb_wide_done[g]),
                 .o_img_done     (w_lb_wide_imgd[g])
@@ -293,6 +295,16 @@ module PU #(
     // L3 lane valid pipelined to align with stage 3.
     reg [LANES_L3-1:0] r_l3_lane_v_s1, r_l3_lane_v_s2;
 
+    // L1/L2 lane valid (from line_buffer_wide ch 0). Same emit pattern across ch.
+    // PE+adder = 3 clk delay then Stage A/B = 2 more = 5 clk before Stage 3 uses it.
+    wire [LANES_WIDE-1:0] w_lv_wide_pe;
+    delay_shift #(.WIDTH(LANES_WIDE), .DELAY(3)) u_lv_pe_dly (
+        .clk(i_clk), .rst(~i_rstn), .en(1'b1),
+        .din(w_lb_wide_lane_v[0]),
+        .dout(w_lv_wide_pe)
+    );
+    reg [LANES_WIDE-1:0] r_lv_wide_s1, r_lv_wide_s2;
+
     integer si, sk;
     always @(posedge i_clk or negedge i_rstn) begin
         if (~i_rstn) begin
@@ -307,6 +319,8 @@ module PU #(
             r_layer_s2     <= 0;
             r_l3_lane_v_s1 <= 0;
             r_l3_lane_v_s2 <= 0;
+            r_lv_wide_s1   <= 0;
+            r_lv_wide_s2   <= 0;
         end else begin
             r_valid_s1     <= w_pe_valid[0][0];
             r_valid_s2     <= r_valid_s1;
@@ -314,6 +328,8 @@ module PU #(
             r_layer_s2     <= r_layer_s1;
             r_l3_lane_v_s1 <= w_lb_l3_lane_v[0];
             r_l3_lane_v_s2 <= r_l3_lane_v_s1;
+            r_lv_wide_s1   <= w_lv_wide_pe;
+            r_lv_wide_s2   <= r_lv_wide_s1;
 
             // ---- Stage 1 : per (oc, lane) pair sum or pass ----
             for (sk = 0; sk < LANES_WIDE; sk = sk + 1) begin
@@ -394,13 +410,16 @@ module PU #(
             o_lane_valid_mask  <= 0;
 
             case (r_layer_s2)
-                2'd0: begin // L1 : 8 oc × 8 lane all valid (line_buffer 내부 mask 처리).
+                2'd0: begin // L1 : 8 oc × 8 lane. lane_valid mask 적용 (col 0/151 = 0).
                     o_oc_valid_mask <= 8'hFF;
-                    o_lane_valid_mask <= {(MAX_CH*LANES_WIDE){1'b1}};
+                    for (oi = 0; oi < MAX_CH; oi = oi + 1) begin
+                        o_lane_valid_mask[oi*LANES_WIDE +: LANES_WIDE] <= r_lv_wide_s2;
+                    end
                     for (oi = 0; oi < MAX_CH; oi = oi + 1) begin
                         for (ok = 0; ok < LANES_WIDE; ok = ok + 1) begin
                             // oc slot = bits[oi*128 +: 128], lane order MSB→LSB inside slot.
                             o_pixel_data[oi*128 + (LANES_WIDE-1-ok)*16 +: 16] <=
+                                (~r_lv_wide_s2[ok])                    ? 16'sd0      :
                                 (r_add_total[oi][ok][31])              ? 16'sd0      :
                                 (r_add_total[oi][ok] > 32'sd32767)     ? 16'sd32767  :
                                                                          r_add_total[oi][ok][15:0];
@@ -409,9 +428,10 @@ module PU #(
                 end
                 2'd1: begin // L2 : oc slot 0 × 8 lane.
                     o_oc_valid_mask <= 8'b00000001;
-                    o_lane_valid_mask[LANES_WIDE-1:0] <= {LANES_WIDE{1'b1}};
+                    o_lane_valid_mask[LANES_WIDE-1:0] <= r_lv_wide_s2;
                     for (ok = 0; ok < LANES_WIDE; ok = ok + 1) begin
                         o_pixel_data[0*128 + (LANES_WIDE-1-ok)*16 +: 16] <=
+                            (~r_lv_wide_s2[ok])               ? 16'sd0     :
                             (r_add_total[0][ok][31])          ? 16'sd0     :
                             (r_add_total[0][ok] > 32'sd32767) ? 16'sd32767 :
                                                                 r_add_total[0][ok][15:0];

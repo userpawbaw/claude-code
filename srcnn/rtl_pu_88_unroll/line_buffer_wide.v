@@ -37,6 +37,7 @@ module line_buffer_wide #(
     parameter WIN_COL      = 10,
     parameter SHIFT_STEP   = 8,
     parameter DATA_BIT     = 16,
+    parameter LANE_NUM     = SHIFT_STEP,                    // 8 output lanes
 
     parameter SHIFT_BITS   = SHIFT_STEP * DATA_BIT,         // 128
     parameter LINE_SIZE    = IMG_WIDTH * DATA_BIT,          // 2432
@@ -51,6 +52,7 @@ module line_buffer_wide #(
     input  wire [SHIFT_BITS-1:0]      i_input_data,
 
     output reg  [WIN_SIZE-1:0]        o_line_data,
+    output reg  [LANE_NUM-1:0]        o_lane_valid,
     output reg                        o_line_valid,
     output reg                        o_line_rd_done,
     output reg                        o_img_done
@@ -127,28 +129,45 @@ module line_buffer_wide #(
     reg r_valid, r_done;
     reg r_mask_lane0;   // high when slice[9] of this emit is stale (= "col -1" pad slot)
 
+    // Per-lane padding mask :
+    //   r_col_word == 1 (row-start emit, out cols 0..7) → lane 0 = col 0  = pad (0).
+    //   r_col_word == 0 (boundary emit, out cols 144..151) → lane 7 = col 151 = pad.
+    //   other → all 8 lanes valid.
+    wire [LANE_NUM-1:0] w_lane_valid_full =
+        (r_col_word == 1) ? 8'b1111_1110 :
+        (r_col_word == 0) ? 8'b0111_1111 :
+                             8'b1111_1111;
+
+    reg [LANE_NUM-1:0] r_lane_valid;
+
     always @(posedge i_clk or negedge i_rstn) begin
         if (!i_rstn) begin
             r_valid        <= 0;
             r_done         <= 0;
             r_mask_lane0   <= 0;
+            r_lane_valid   <= 0;
             o_line_valid   <= 0;
             o_line_rd_done <= 0;
             o_img_done     <= 0;
+            o_lane_valid   <= 0;
         end else if (i_IDLE_rst) begin
             r_valid        <= 0;
             r_done         <= 0;
             r_mask_lane0   <= 0;
+            r_lane_valid   <= 0;
             o_line_valid   <= 0;
             o_line_rd_done <= 0;
             o_img_done     <= 0;
+            o_lane_valid   <= 0;
         end else begin
             r_valid        <= w_valid_in_window;
             r_done         <= w_done_in_window;
             r_mask_lane0   <= w_valid_in_window && (r_col_word == 1);
+            r_lane_valid   <= w_valid_in_window ? w_lane_valid_full : {LANE_NUM{1'b0}};
             o_line_valid   <= r_valid;
             o_line_rd_done <= r_done;
             o_img_done     <= w_img_done;
+            o_lane_valid   <= r_lane_valid;
         end
     end
 
