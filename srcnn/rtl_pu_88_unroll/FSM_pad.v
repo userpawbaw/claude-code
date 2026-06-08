@@ -173,7 +173,8 @@ module FSM_pad #(
                 if (r_stream_cnt >= w_stream_len - 1)
                     r_ns = S_DRAIN;
             S_DRAIN :
-                if (r_drain_cnt >= DRAIN_LEN - 1) begin
+                // PU pipeline 끝 = i_pe_done pulse. 도착하면 다음 단계.
+                if (i_pe_done) begin
                     if (r_layer_cnt == 2'd2) r_ns = S_DONE;       // L3 : no bot pad
                     else                     r_ns = S_PAD_BOT;
                 end
@@ -182,7 +183,7 @@ module FSM_pad #(
                     r_ns = S_DONE;
             S_DONE :
                 if (o_all_done)     r_ns = S_DONE;
-                else if (i_pe_done) r_ns = S_IDLE;
+                else                r_ns = S_IDLE;                // 바로 진행 (pe_done 은 S_DRAIN 에서 체크)
             default: r_ns = S_IDLE;
         endcase
     end
@@ -325,32 +326,30 @@ module FSM_pad #(
                 end
 
                 S_DONE : begin
-                    if (i_pe_done) begin
-                        o_IDLE_rst     <= 1'b1;
-                        o_dispatch_rst <= 1'b1;
-                        r_word_idx     <= 0;
-                        r_pad_cnt      <= 0;
-                        r_stream_cnt   <= 0;
-                        r_drain_cnt    <= 0;
-                        r_bram_addr    <= 0;
-                        r_uram_addr    <= 0;
-                        r_l3_toggle    <= 0;
+                    o_IDLE_rst     <= 1'b1;
+                    o_dispatch_rst <= 1'b1;
+                    r_word_idx     <= 0;
+                    r_pad_cnt      <= 0;
+                    r_stream_cnt   <= 0;
+                    r_drain_cnt    <= 0;
+                    r_bram_addr    <= 0;
+                    r_uram_addr    <= 0;
+                    r_l3_toggle    <= 0;
 
-                        if (r_layer_cnt == 2'd1 && !w_last_oc) begin
-                            // next L2 pass : same layer, next oc.
-                            r_out_ch_cnt <= r_out_ch_cnt + 1'b1;
-                        end else if (!w_last_layer) begin
-                            r_layer_cnt  <= r_layer_cnt + 2'd1;
-                            r_out_ch_cnt <= 0;
+                    if (r_layer_cnt == 2'd1 && !w_last_oc) begin
+                        // next L2 pass : same layer, next oc.
+                        r_out_ch_cnt <= r_out_ch_cnt + 1'b1;
+                    end else if (!w_last_layer) begin
+                        r_layer_cnt  <= r_layer_cnt + 2'd1;
+                        r_out_ch_cnt <= 0;
+                    end else begin
+                        o_img_done   <= 1'b1;
+                        r_layer_cnt  <= 2'd0;
+                        r_out_ch_cnt <= 0;
+                        if (r_img_cnt == NUM_IMG - 1) begin
+                            o_all_done <= 1'b1;
                         end else begin
-                            o_img_done   <= 1'b1;
-                            r_layer_cnt  <= 2'd0;
-                            r_out_ch_cnt <= 0;
-                            if (r_img_cnt == NUM_IMG - 1) begin
-                                o_all_done <= 1'b1;
-                            end else begin
-                                r_img_cnt <= r_img_cnt + 1'b1;
-                            end
+                            r_img_cnt <= r_img_cnt + 1'b1;
                         end
                     end
                 end
