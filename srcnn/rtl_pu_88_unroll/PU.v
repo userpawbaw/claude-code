@@ -364,25 +364,25 @@ module PU #(
             for (sk = 0; sk < LANES_WIDE; sk = sk + 1) begin
                 case (r_layer_s1)
                     2'd0: begin // L1 : per-oc bias.
-                        r_add_total[0][sk] <= (r_add_stage1[0][sk] >>> 8) + {{16{r_bias[0][15]}}, r_bias[0]};
-                        r_add_total[1][sk] <= (r_add_stage1[1][sk] >>> 8) + {{16{r_bias[1][15]}}, r_bias[1]};
-                        r_add_total[2][sk] <= (r_add_stage1[2][sk] >>> 8) + {{16{r_bias[2][15]}}, r_bias[2]};
-                        r_add_total[3][sk] <= (r_add_stage1[3][sk] >>> 8) + {{16{r_bias[3][15]}}, r_bias[3]};
-                        r_add_total[4][sk] <= (r_add_stage1[4][sk] >>> 8) + {{16{r_bias[4][15]}}, r_bias[4]};
-                        r_add_total[5][sk] <= (r_add_stage1[5][sk] >>> 8) + {{16{r_bias[5][15]}}, r_bias[5]};
-                        r_add_total[6][sk] <= (r_add_stage1[6][sk] >>> 8) + {{16{r_bias[6][15]}}, r_bias[6]};
-                        r_add_total[7][sk] <= (r_add_stage1[7][sk] >>> 8) + {{16{r_bias[7][15]}}, r_bias[7]};
+                        r_add_total[0][sk] <= (r_add_stage1[0][sk] >>> 8) + $signed({{16{r_bias[0][15]}}, r_bias[0]});
+                        r_add_total[1][sk] <= (r_add_stage1[1][sk] >>> 8) + $signed({{16{r_bias[1][15]}}, r_bias[1]});
+                        r_add_total[2][sk] <= (r_add_stage1[2][sk] >>> 8) + $signed({{16{r_bias[2][15]}}, r_bias[2]});
+                        r_add_total[3][sk] <= (r_add_stage1[3][sk] >>> 8) + $signed({{16{r_bias[3][15]}}, r_bias[3]});
+                        r_add_total[4][sk] <= (r_add_stage1[4][sk] >>> 8) + $signed({{16{r_bias[4][15]}}, r_bias[4]});
+                        r_add_total[5][sk] <= (r_add_stage1[5][sk] >>> 8) + $signed({{16{r_bias[5][15]}}, r_bias[5]});
+                        r_add_total[6][sk] <= (r_add_stage1[6][sk] >>> 8) + $signed({{16{r_bias[6][15]}}, r_bias[6]});
+                        r_add_total[7][sk] <= (r_add_stage1[7][sk] >>> 8) + $signed({{16{r_bias[7][15]}}, r_bias[7]});
                     end
                     2'd1: begin // L2 : 4-way sum + bias[oc_sel] (slot 0).
                         r_add_total[0][sk] <= ((r_add_stage1[0][sk] + r_add_stage1[1][sk]
                                               + r_add_stage1[2][sk] + r_add_stage1[3][sk]) >>> 8)
-                                            + {{16{w_L2_bias[15]}}, w_L2_bias};
+                                            + $signed({{16{w_L2_bias[15]}}, w_L2_bias});
                         for (si = 1; si < MAX_CH; si = si + 1) r_add_total[si][sk] <= 0;
                     end
                     2'd2: begin // L3 : 4-way sum + bias[0] (slot 0).
                         r_add_total[0][sk] <= ((r_add_stage1[0][sk] + r_add_stage1[1][sk]
                                               + r_add_stage1[2][sk] + r_add_stage1[3][sk]) >>> 8)
-                                            + {{16{r_bias[0][15]}}, r_bias[0]};
+                                            + $signed({{16{r_bias[0][15]}}, r_bias[0]});
                         for (si = 1; si < MAX_CH; si = si + 1) r_add_total[si][sk] <= 0;
                     end
                     default: begin
