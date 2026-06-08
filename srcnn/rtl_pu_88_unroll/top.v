@@ -42,6 +42,8 @@ module top #(
     wire                       w_intermid_uram_rd_en;
     wire [MEM_ADDR-3:0]        w_intermid_uram_rd_addr;
     wire                       w_fifo_rd_en;       // unused (kept for FSM compat)
+    wire                       w_input_dummy_valid; // L1/L2 dummy + L3 toggle filler
+    wire                       w_pad_wr_en;         // URAM_L1/L2 padding write
     wire                       w_IDLE_rst;
     wire                       w_dispatch_rst;
     wire                       w_wr_addr_rst;
@@ -87,6 +89,8 @@ module top #(
         .o_intermid_uram_rd_en   (w_intermid_uram_rd_en),
         .o_intermid_uram_rd_addr (w_intermid_uram_rd_addr),
         .o_fifo_rd_en            (w_fifo_rd_en),
+        .o_input_dummy_valid     (w_input_dummy_valid),
+        .o_pad_wr_en             (w_pad_wr_en),
         .o_IDLE_rst              (w_IDLE_rst),
         .o_dispatch_rst          (w_dispatch_rst),
         .o_wr_addr_rst           (w_wr_addr_rst),
@@ -144,23 +148,45 @@ module top #(
     wire [127:0]        w_uram_L2_dout    [0:MAX_CH-1];
     wire                w_uram_L2_rd_valid[0:MAX_CH-1];
 
-    reg [URAM_AW-1:0]   r_wr_addr;
-    always @(posedge i_clk or negedge i_rstn) begin
-        if (~i_rstn)                r_wr_addr <= 0;
-        else if (w_wr_addr_rst)     r_wr_addr <= 0;
-        else if (w_active_wr_pulse) r_wr_addr <= r_wr_addr + 1'b1;
-    end
+    // URAM wr_en (per bank) : pack_we OR pad_wr_en. wr_din muxed to 0 during pad.
+    wire w_uram_L1_wr_en [0:MAX_CH-1];
+    wire w_uram_L2_wr_en [0:MAX_CH-1];
+    wire [127:0] w_uram_L1_wr_din [0:MAX_CH-1];
+    wire [127:0] w_uram_L2_wr_din;
 
     genvar b;
+    generate
+        for (b = 0; b < MAX_CH; b = b + 1) begin : gen_wr_mux
+            assign w_uram_L1_wr_en[b]   = (w_layer_cnt == 2'd0)
+                                         && (w_pack_we[b] || w_pad_wr_en);
+            assign w_uram_L1_wr_din[b]  = w_pad_wr_en ? 128'h0
+                                                       : w_pack_dout_flat[128*b +: 128];
+            assign w_uram_L2_wr_en[b]   = (w_layer_cnt == 2'd1)
+                                         && (w_out_ch_cnt == b[2:0])
+                                         && (w_pack_we[0] || w_pad_wr_en);
+        end
+    endgenerate
+    assign w_uram_L2_wr_din = w_pad_wr_en ? 128'h0 : w_pack_dout_flat[0 +: 128];
+
+    // wr_addr advances on either pack_we[0] or pad_wr_en.
+    wire w_wr_advance = w_pack_we[0] || w_pad_wr_en;
+
+    reg [URAM_AW-1:0]   r_wr_addr;
+    always @(posedge i_clk or negedge i_rstn) begin
+        if (~i_rstn)              r_wr_addr <= 0;
+        else if (w_wr_addr_rst)   r_wr_addr <= 0;
+        else if (w_wr_advance)    r_wr_addr <= r_wr_addr + 1'b1;
+    end
+
     generate
         for (b = 0; b < MAX_CH; b = b + 1) begin : gen_uram_L1
             simple_dual_port_uram #(
                 .WIDTH(128), .DEPTH(2888), .INIT_FILE("")
             ) u_uram_L1 (
                 .clk      (i_clk),
-                .wr_en    ((w_layer_cnt == 2'd0) && w_pack_we[b]),
+                .wr_en    (w_uram_L1_wr_en[b]),
                 .wr_addr  (r_wr_addr),
-                .wr_din   (w_pack_dout_flat[128*b +: 128]),
+                .wr_din   (w_uram_L1_wr_din[b]),
                 .rd_en    ((w_layer_cnt == 2'd1) && w_intermid_uram_rd_en),
                 .rd_addr  (w_intermid_uram_rd_addr[URAM_AW-1:0]),
                 .rd_valid (w_uram_L1_rd_valid[b]),
@@ -172,9 +198,9 @@ module top #(
                 .WIDTH(128), .DEPTH(2888), .INIT_FILE("")
             ) u_uram_L2 (
                 .clk      (i_clk),
-                .wr_en    ((w_layer_cnt == 2'd1) && (w_out_ch_cnt == b[2:0]) && w_pack_we[0]),
+                .wr_en    (w_uram_L2_wr_en[b]),
                 .wr_addr  (r_wr_addr),
-                .wr_din   (w_pack_dout_flat[0 +: 128]),
+                .wr_din   (w_uram_L2_wr_din),
                 .rd_en    ((w_layer_cnt == 2'd2) && w_intermid_uram_rd_en),
                 .rd_addr  (w_intermid_uram_rd_addr[URAM_AW-1:0]),
                 .rd_valid (w_uram_L2_rd_valid[b]),
@@ -232,18 +258,26 @@ module top #(
     //   L1 : slot 0 (MSB 128b) = input BRAM, 나머지 0.
     //   L2 : 8 slot = w_uram_L1_dout[0..7].
     // ------------------------------------------------------------------
+    // For L1 dummy : 0 data carried by w_input_dummy_valid (1 clk after stream end).
+    // For L2 dummy : same. Both gate input to line buffer.
+    wire [127:0] w_l1_data_in = w_input_dummy_valid ? 128'h0 : w_i_dout;
+
     wire [MAX_CH*128-1:0] w_pu_data_wide;
     assign w_pu_data_wide =
         (w_layer_cnt == 2'd0) ?
-            { w_i_dout, {(MAX_CH-1){128'h0}} } :
-            { w_uram_L1_dout[0], w_uram_L1_dout[1],
-              w_uram_L1_dout[2], w_uram_L1_dout[3],
-              w_uram_L1_dout[4], w_uram_L1_dout[5],
-              w_uram_L1_dout[6], w_uram_L1_dout[7] };
+            { w_l1_data_in, {(MAX_CH-1){128'h0}} } :
+            { (w_input_dummy_valid ? 128'h0 : w_uram_L1_dout[0]),
+              (w_input_dummy_valid ? 128'h0 : w_uram_L1_dout[1]),
+              (w_input_dummy_valid ? 128'h0 : w_uram_L1_dout[2]),
+              (w_input_dummy_valid ? 128'h0 : w_uram_L1_dout[3]),
+              (w_input_dummy_valid ? 128'h0 : w_uram_L1_dout[4]),
+              (w_input_dummy_valid ? 128'h0 : w_uram_L1_dout[5]),
+              (w_input_dummy_valid ? 128'h0 : w_uram_L1_dout[6]),
+              (w_input_dummy_valid ? 128'h0 : w_uram_L1_dout[7]) };
 
     wire w_pu_input_valid =
-        (w_layer_cnt == 2'd0) ? w_i_rd_valid :
-        (w_layer_cnt == 2'd1) ? w_uram_L1_rd_valid[0] :
+        (w_layer_cnt == 2'd0) ? (w_i_rd_valid | w_input_dummy_valid) :
+        (w_layer_cnt == 2'd1) ? (w_uram_L1_rd_valid[0] | w_input_dummy_valid) :
                                 r_l3_in_valid;
 
     // ------------------------------------------------------------------
