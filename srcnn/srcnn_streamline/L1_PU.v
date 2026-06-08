@@ -140,10 +140,10 @@ module L1_PU #(
     // =========================================================================
     // 4. img_done propagation (drain-aligned for FSM i_adder_done)
     //    L1 pipeline depth from line_buffer.o_img_done:
-    //      pe_group: 3clk + output register: 1clk = 4clk
+    //      pe_group: 2clk + output register: 1clk = 3clk
     // =========================================================================
     delay_shift #(
-        .DELAY(3+1)
+        .DELAY(2+1)
     ) d_l1_img_done (
         .clk(i_clk),
         .rst(~i_rstn),

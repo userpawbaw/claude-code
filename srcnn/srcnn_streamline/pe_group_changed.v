@@ -28,15 +28,15 @@ module pe_group #(
 
     // weight 공급 (기존 top.v weight_en/w_rd_dout 와 동일 역할)
     input wire signed [15:0]    i_weight,         // 공통 weight 버스 (브로드캐스트)
-    // input wire                  i_w_group_en,           // 해당 PE_group의 weight en 
-    input wire [8:0]            i_w_tap_en,             // PE 슬롯별 weight en 
+    // input wire                  i_w_group_en,           // 해당 PE_group의 weight en
+    input wire [8:0]            i_w_tap_en,             // PE 슬롯별 weight en
 
     input  wire                 i_line_done,
     // partial sum 출력 (채널 누적 전, 공간 9-tap 합)
-    output reg                  o_valid,          // 기존 adder_val_final 타이밍
-    output reg  signed [20:0]   o_partial,         // 기존 r_add_total 과 동일 비트폭/의미
+    output reg                  o_valid,          // pe_valid -> o_valid (1단 파이프)
+    output wire signed [20:0]   o_partial,        // stage1 합산 (combinational)
     output wire                 o_pe_done
-    
+
 );
 
     // -------------------------------------------------------------------------
@@ -62,13 +62,13 @@ module pe_group #(
     endgenerate
 
     // -------------------------------------------------------------------------
-    // Adder Tree Pipeline — 기존 top.v section 7 그대로 이식  
-    //   stage1 : 3개씩 3그룹 합 (pe_output[48*j +: ...])
-    //   total  : stage1 3개 합
-    //   valid  : pe_valid -> adder_val1 -> o_valid (2단 파이프)
+    // Adder Tree Pipeline — 1단으로 축소
+    //   stage1 (register) : 3개씩 3그룹 합 (pe_output[48*j +: ...])
+    //   o_partial (wire)  : stage1 3개 합 (조합)
+    //   valid             : pe_valid -> o_valid (1단 파이프)
+    //   기존 partial<=add_total 단계 제거 → 데이터/valid 모두 PE 출력 후 1clk 지연.
     // no clipping applied.
     // -------------------------------------------------------------------------
-    reg                 adder_val1;
     reg signed [19:0]   r_add_stage1 [2:0];
 
     integer j;
@@ -77,25 +77,23 @@ module pe_group #(
             r_add_stage1[0] <= 0;
             r_add_stage1[1] <= 0;
             r_add_stage1[2] <= 0;
-            o_partial       <= 0;
-            adder_val1      <= 0;
             o_valid         <= 0;
         end else begin
-            { adder_val1, o_valid } <= { pe_valid, adder_val1 };
+            o_valid <= pe_valid;
 
             for (j = 0; j < 3; j = j + 1) begin
                 r_add_stage1[j] <= $signed(pe_output[48*j      +: 16]) +
                                    $signed(pe_output[48*j + 16 +: 16]) +
                                    $signed(pe_output[48*j + 32 +: 16]);
             end
-
-            o_partial <= r_add_stage1[0] + r_add_stage1[1] + r_add_stage1[2];
         end
     end
 
+    assign o_partial = r_add_stage1[0] + r_add_stage1[1] + r_add_stage1[2];
+
 delay_shift #(
-.DELAY(3)
-)d3_pe_en_to_add_valid (
+.DELAY(2)
+)d2_pe_en_to_add_valid (
     .clk(i_clk),
     .rst(~i_rstn),
     .en (1'b1),
