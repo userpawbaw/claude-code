@@ -154,7 +154,13 @@ module packer_l3_8x #(
                 endcase
             end else if (i_flush) begin
                 if (r_cnt != 3'd0) begin
-                    o_data      <= r_save;          // valid px MSB-aligned, LSB = 0
+                    // valid px = 상위 cnt 개만. 하위 잔재는 0 으로 마스킹.
+                    case (r_cnt)
+                        3'd2:    o_data <= { r_save[W-1 -: W2], {(W-W2){1'b0}} };
+                        3'd4:    o_data <= { r_save[W-1 -: W4], {(W-W4){1'b0}} };
+                        3'd6:    o_data <= { r_save[W-1 -: W6], {(W-W6){1'b0}} };
+                        default: o_data <= r_save;
+                    endcase
                     o_we        <= 1'b1;
                     o_flush_cnt <= {1'b0, r_cnt};
                     r_cnt       <= 3'd0;
