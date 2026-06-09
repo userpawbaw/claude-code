@@ -318,15 +318,22 @@ module top #(
 
     // ------------------------------------------------------------------
     // L3 packer (8-way) : 6/8 valid 스트림 → 8-px word stream.
-    //   flush : pu_img_done (= L3 line buffer img_done) 시점에 save 남은 px 출력.
-    //           PU 내부 +3 clk 지연을 거쳐 packer 출력 정렬에 맞춤.
+    //   flush : o_pixel_valid 하강엣지(+1 clk) 기준으로 발생.
+    //           delay-count 방식은 dummy i_en 추가 사이클에 취약하므로
+    //           실제 신호 기반으로 타이밍 확정.
     // ------------------------------------------------------------------
+    reg  r_pix_valid_d1;
+    always @(posedge i_clk or negedge i_rstn)
+        r_pix_valid_d1 <= i_rstn ? o_pixel_valid : 1'b0;
+
+    // falling edge of o_pixel_valid while processing L3 → flush 1 cycle later
+    wire w_pix_fall = r_pix_valid_d1 && !o_pixel_valid && (w_layer_cnt == 2'd2);
     wire w_pack_flush;
     delay_shift #(.DELAY(1)) u_flush_dly (
         .clk  (i_clk),
         .rst  (~i_rstn),
         .en   (1'b1),
-        .din  (w_pu_img_done & (w_layer_cnt == 2'd2)),
+        .din  (w_pix_fall),
         .dout (w_pack_flush)
     );
 

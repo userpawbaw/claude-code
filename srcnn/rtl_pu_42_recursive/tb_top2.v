@@ -134,6 +134,16 @@ module tb_top2;
         end
     end
 
+    // ---------- DEBUG probe : L3 img_done / flush timing ----------
+    always @(posedge clk) begin
+        if (dut.w_pu_img_done)
+            $display("[%0t] PU_IMG_DONE layer=%0d img=%0d  pack_rcnt=%0d",
+                $time, dut.w_layer_cnt, dut.w_img_cnt, dut.u_pack_l3.r_cnt);
+        if (dut.w_pack_flush)
+            $display("[%0t] PACK_FLUSH layer=%0d pack_rcnt=%0d i_en=%b",
+                $time, dut.w_layer_cnt, dut.u_pack_l3.r_cnt, dut.o_pixel_valid);
+    end
+
     // ---------- periodic status ----------
     integer cyc;
     initial cyc = 0;
