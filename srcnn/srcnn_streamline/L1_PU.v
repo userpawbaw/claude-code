@@ -23,7 +23,7 @@ module L1_PU #(
     
     // 3. Final Output (To L1 Output URAM, 128-bit)
     output reg                          o_pixel_valid,
-    output reg  [(OUT_CH*DATA_BIT)-1:0] o_uram_data,
+    output reg  [(OUT_CH*DATA_BIT)-1:0] o_pixel_data,
 
     // 4. Done signal for FSM (drain-aligned)
     output wire                         o_img_done
@@ -88,7 +88,7 @@ module L1_PU #(
     );
 
     wire               w_pe_valid [0:OUT_CH-1];
-    wire signed [20:0] w_partial [0:OUT_CH-1];
+    wire signed [31:0] w_partial [0:OUT_CH-1];
     wire [OUT_CH-1:0]  w_pe_done;
 
     genvar j;
@@ -119,21 +119,22 @@ module L1_PU #(
 
     generate
         for (j = 0; j < OUT_CH; j = j + 1) begin : gen_relu
-            wire signed [21:0] w_sum = w_partial[j] + r_bias[j];
+            wire signed [31:0] w_sum_q8_8;
+            assign w_sum_q8_8  = ( $signed(w_partial[j])>>>8 ) + $signed(r_bias[j]);
             assign w_final_concat[16*j +: 16] =
-                (w_sum[21])     ? 16'd0       :
-                (|w_sum[20:15]) ? 16'h7FFF    :
-                                  w_sum[15:0];
+                (w_sum_q8_8[31])        ? 16'd0       :
+                (|w_sum_q8_8[30:15])    ? 16'h7FFF    :
+                                          w_sum_q8_8[15:0];
         end
     endgenerate
 
     always @(posedge i_clk or negedge i_rstn) begin
         if (~i_rstn) begin
             o_pixel_valid <= 0;
-            o_uram_data   <= 0;
+            o_pixel_data   <= 0;
         end else begin
             o_pixel_valid <= w_pe_valid[0]; // 모든 PE valid 신호 동일
-            o_uram_data   <= w_final_concat;
+            o_pixel_data   <= w_final_concat;
         end
     end
 
