@@ -43,7 +43,7 @@ module pe_group #(
     // PE array (9개) — 기존 gen_PE 와 동일
     // -------------------------------------------------------------------------
     wire                pe_valid;
-    wire [16*9-1:0]     pe_output;
+    wire signed [31:0] pe_output [0:8];
 
     genvar i;
     generate
@@ -56,7 +56,7 @@ module pe_group #(
                 .i_input  (i_line_data[16*i +: 16]),
                 .i_weight (i_weight),
                 .o_valid  (pe_valid),
-                .o_output (pe_output[16*i +: 16])
+                .o_output (pe_output[i])
             );
         end
     endgenerate
@@ -69,7 +69,7 @@ module pe_group #(
     // no clipping applied.
     // -------------------------------------------------------------------------
     reg                 adder_val1;
-    reg signed [19:0]   r_add_stage1 [2:0];
+    reg signed [31:0]   r_add_stage1 [2:0];
 
     integer j;
     always @(posedge i_clk or negedge i_rstn) begin
@@ -84,12 +84,14 @@ module pe_group #(
             { adder_val1, o_valid } <= { pe_valid, adder_val1 };
 
             for (j = 0; j < 3; j = j + 1) begin
-                r_add_stage1[j] <= $signed(pe_output[48*j      +: 16]) +
-                                   $signed(pe_output[48*j + 16 +: 16]) +
-                                   $signed(pe_output[48*j + 32 +: 16]);
+                r_add_stage1[j] <= $signed(pe_output[3*j]) +
+                                   $signed(pe_output[3*j + 1]) +
+                                   $signed(pe_output[3*j + 2]);
             end
 
-            o_partial <= r_add_stage1[0] + r_add_stage1[1] + r_add_stage1[2];
+            o_partial <=  $signed(r_add_stage1[0]) +
+                           $signed(r_add_stage1[1]) +
+                           $signed(r_add_stage1[2]);
         end
     end
 
