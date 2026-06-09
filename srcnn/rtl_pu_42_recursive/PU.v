@@ -290,7 +290,14 @@ module PU #(
     reg               r_valid_s1, r_valid_s2;
 
     // L3 lane valid pipelined to align with stage 3.  8-way: width = LANES_L3 = 8.
+    // Must match L1/L2 path: delay_shift(3) to absorb pe_group latency, then 2 PU stages.
     reg [LANES_L3-1:0] r_l3_lane_v_s1, r_l3_lane_v_s2;
+    wire [LANES_L3-1:0] w_lv_l3_pe;
+    delay_shift #(.WIDTH(LANES_L3), .DELAY(3)) u_lv_l3_pe_dly (
+        .clk(i_clk), .rst(~i_rstn), .en(1'b1),
+        .din(w_lb_l3_lane_v[0]),
+        .dout(w_lv_l3_pe)
+    );
 
     // L1/L2 lane valid (from line_buffer_wide ch 0). Same emit pattern across ch.
     // PE+adder = 3 clk delay then Stage A/B = 2 more = 5 clk before Stage 3 uses it.
@@ -323,7 +330,7 @@ module PU #(
             r_valid_s2     <= r_valid_s1;
             r_layer_s1     <= i_layer_cnt;
             r_layer_s2     <= r_layer_s1;
-            r_l3_lane_v_s1 <= w_lb_l3_lane_v[0];
+            r_l3_lane_v_s1 <= w_lv_l3_pe;
             r_l3_lane_v_s2 <= r_l3_lane_v_s1;
             r_lv_wide_s1   <= w_lv_wide_pe;
             r_lv_wide_s2   <= r_lv_wide_s1;
