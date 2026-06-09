@@ -116,8 +116,7 @@ module tb_top2;
     // Compare only valid (row 1..150, col 1..149) pixels.
     // Golden pixel: gold_out[img*WPCH + row*WPR + col/8], bit (7-col%8)*16+:16.
 
-    // L3 8-way : pix_valid 펄스 카운트 + packer 출력 word 카운트만 수집.
-    //   상세 값 검증은 추후 별도 작업 (packer 출력을 150x150 stream 으로 재배열 필요).
+    // L3 8-way counts.
     integer err_L3;
     integer cnt_L3;          // raw pix_valid pulses
     integer cnt_out_we;      // packer output we pulses
@@ -131,6 +130,49 @@ module tb_top2;
         if (out_we) begin
             cnt_out_we = cnt_out_we + 1;
             if (out_flush_cnt != 4'd0) cnt_out_flush = cnt_out_flush + 1;
+        end
+    end
+
+    // ---------- L3 packer output VALUE comparison ----------
+    // Flat stream order: padded rows 1..150, padded cols 0..149 (150 px/row, row-major).
+    //   lane k → out col 8K-2+k; K=0 lanes 2..7 valid = padded cols 0..5.
+    //   flat_pos p → padded_row = 1+p/150, padded_col = p%150.
+    //   out_word MSB-first: out_word[(7-fi)*16 +: 16] = pixel fi in word.
+    //   Skip padded_col==0 (left-border: RTL non-zero, golden forced 0).
+    //   golden_out[img*WPCH + prow*WPR + pcol/8][(7-pcol%8)*16 +: 16].
+    integer l3_wc;          // word count within current image (reset after flush)
+    integer l3_img_out;     // current output image index (0..NIMG-1)
+    integer err_L3_val;     // value comparison errors
+    integer fi_v;
+    integer flat_p, prow_v, pcol_v, flush_n_v;
+    reg [15:0] got_v, exp_v;
+    initial begin l3_wc = 0; l3_img_out = 0; err_L3_val = 0; end
+
+    always @(posedge clk) begin
+        if (out_we && l3_img_out < NIMG) begin
+            flush_n_v = (out_flush_cnt == 4'd0) ? 8 : {28'd0, out_flush_cnt};
+            for (fi_v = 0; fi_v < flush_n_v; fi_v = fi_v + 1) begin
+                flat_p  = l3_wc * 8 + fi_v;
+                prow_v  = 1 + flat_p / 150;
+                pcol_v  = flat_p % 150;
+                if (pcol_v >= 1) begin
+                    exp_v = gold_out[l3_img_out * WPCH + prow_v * WPR + pcol_v / 8]
+                                    [(7 - pcol_v % 8) * 16 +: 16];
+                    got_v = out_word[(7 - fi_v) * 16 +: 16];
+                    if (got_v !== exp_v) begin
+                        if (err_L3_val < 8)
+                            $display("L3V ERR img=%0d orig_r=%0d orig_c=%0d got=%04x exp=%04x",
+                                l3_img_out, prow_v-1, pcol_v-1, got_v, exp_v);
+                        err_L3_val = err_L3_val + 1;
+                    end
+                end
+            end
+            if (out_flush_cnt != 4'd0) begin
+                l3_wc      = 0;
+                l3_img_out = l3_img_out + 1;
+            end else begin
+                l3_wc = l3_wc + 1;
+            end
         end
     end
 
@@ -171,9 +213,9 @@ module tb_top2;
         $display("all_done=%b", all_done);
         $display("L1 : %0d writes, %0d errors", cnt_L1, err_L1);
         $display("L2 : %0d writes, %0d errors", cnt_L2, err_L2);
-        $display("L3 : %0d raw pulses, %0d packer words (%0d flush), %0d errors",
-                 cnt_L3, cnt_out_we, cnt_out_flush, err_L3);
-        if (err_L1 == 0 && err_L2 == 0 && err_L3 == 0 && all_done)
+        $display("L3 : %0d raw pulses, %0d packer words (%0d flush), %0d cnt_err, %0d val_err",
+                 cnt_L3, cnt_out_we, cnt_out_flush, err_L3, err_L3_val);
+        if (err_L1 == 0 && err_L2 == 0 && err_L3 == 0 && err_L3_val == 0 && all_done)
             $display("PASS");
         else
             $display("FAIL");
