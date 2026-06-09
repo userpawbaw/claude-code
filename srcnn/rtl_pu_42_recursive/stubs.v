@@ -69,10 +69,10 @@ module simple_dual_port_uram #(
 )(
     input  wire                     clk,
     input  wire                     wr_en,
-    input  wire [12:0]              wr_addr,
+    input  wire [14:0]              wr_addr,
     input  wire [WIDTH-1:0]         wr_din,
     input  wire                     rd_en,
-    input  wire [12:0]              rd_addr,
+    input  wire [14:0]              rd_addr,
     output reg                      rd_valid,
     output reg  [WIDTH-1:0]         rd_dout
 );
