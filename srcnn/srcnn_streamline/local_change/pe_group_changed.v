@@ -1,16 +1,15 @@
 `timescale 1ns / 1ps
 // +FHDR------------------------------------------------------------------------
 // FILE NAME      : pe_group.v
-// PURPOSE        : 3x3 conv PE 묶음 1개. PE 9개 + 공간 adder tree 캡슐화.
-//                  입력 채널 1개를 처리하여 공간 9-tap 합산 부분합(partial sum)을 출력.
+// PURPOSE        : 3x3 conv PE ?��?��?�� 1�?? PE 9�??+ ?�듦�? adder tree 罹≪?��??
+//                  ??��?�� �?꾨꼸 1媛쒕? 泥섎?��??���? ?�듦�? 9-tap ??���? ?��??��꾪�?(partial sum)???��?��?��.
 // -----------------------------------------------------------------------------
 // NOTE
-//   - 기존 top.v 의 "PE generate + adder tree pipeline" 로직을 그대로 모듈화.
-//     Layer 1 회귀가 깨지지 않도록 비트 인덱싱/파이프라인 타이밍을 보존한다.
-//   - weight enable(i_wen)은 외부(weight_dispatch 또는 top의 weight_en)에서 공급.
-//     PE 인터페이스(i_en_w 1펄스에 weight 1개 래치)는 변경하지 않는다.
-//   - i_weight 는 PE 9개에 공통 연결(브로드캐스트). 어느 슬롯에 래치될지는
-//     i_wen[i] one-hot 으로 결정 (기존 top.v 와 동일한 방식).
+//   - 湲곗?? top.v ??"PE generate + adder tree pipeline" 濡쒖�???洹몃?�??紐⑤�???
+//     Layer 1 ??��?媛�? 源⑥?吏�? ??��룄濡??��꾪듃 ?몃뜳????��?��?꾨씪???????�???蹂댁????��?��.
+//   - weight enable(i_wen)?? ?�??(weight_dispatch ?�??�� top??weight_en)?�?�? ?�듦?��.
+//     PE ?명꽣??��?��??i_en_w 1?꾩뒪??weight 1�????��?��)??蹂�?寃�?�?吏�? ??��?��??
+//   - i_weight ??PE 9媛쒖�? ?�듯?�� ?곌껐(?��?���???��?��??��?��). ????�� ??��??????��?��?�????//     i_wen[i] one-hot ??���? 寃곗?�� (湲곗?? top.v ?? ??��?��??諛⑹?��).
 //
 //   Reset Strategy : Asynchronous, active low (i_rstn)
 //   Synthesizable  : Y
@@ -26,21 +25,21 @@ module pe_group #(
     input wire                 i_line_valid,     // line_buffer o_line_valid
     input wire [16*9-1:0]      i_line_data,      // 144bit 3x3 window (16bit x 9)
 
-    // weight 공급 (기존 top.v weight_en/w_rd_dout 와 동일 역할)
-    input wire signed [15:0]    i_weight,         // 공통 weight 버스 (브로드캐스트)
-    // input wire                  i_w_group_en,           // 해당 PE_group의 weight en 
-    input wire [8:0]            i_w_tap_en,             // PE 슬롯별 weight en 
+    // weight ?�듦?�� (湲곗?? top.v weight_en/w_rd_dout ?? ??��?�� ??�?)
+    input wire signed [15:0]    i_weight,         // ?�듯?�� weight 踰꾩?�� (?��?���???��?��??��?��)
+    // input wire                  i_w_group_en,           // ????�� PE_group??weight en 
+    input wire [8:0]            i_w_tap_en,             // PE ??��?�蹂?weight en 
 
     input  wire                 i_line_done,
-    // partial sum 출력 (채널 누적 전, 공간 9-tap 합)
-    output reg                  o_valid,          // 기존 adder_val_final 타이밍
-    output reg  signed [31:0]   o_partial,         // 기존 r_add_total 과 동일 비트폭/의미
+    // partial sum ?��?��?�� (�?꾨꼸 ?꾩쟻 ?? ?�듦�? 9-tap ??
+    output reg                  o_valid,          // 湲곗?? adder_val_final ?????�?
+    output reg  signed [31:0]   o_partial,         // 湲곗?? r_add_total ?????��?�� ?��꾪듃????��?
     output wire                 o_pe_done
     
 );
 
     // -------------------------------------------------------------------------
-    // PE array (9개) — 기존 gen_PE 와 동일
+    // PE array (9�?? ??湲곗?? gen_PE ?? ??��?��
     // -------------------------------------------------------------------------
     wire                pe_valid;
     wire signed [31:0] pe_output [0:8];
@@ -62,10 +61,9 @@ module pe_group #(
     endgenerate
 
     // -------------------------------------------------------------------------
-    // Adder Tree Pipeline — 기존 top.v section 7 그대로 이식  
-    //   stage1 : 3개씩 3그룹 합 (pe_output[48*j +: ...])
-    //   total  : stage1 3개 합
-    //   valid  : pe_valid -> adder_val1 -> o_valid (2단 파이프)
+    // Adder Tree Pipeline ??湲곗?? top.v section 7 洹몃?�????��?��  
+    //   stage1 : 3媛쒖�? 3洹몃�? ??(pe_output[48*j +: ...])
+    //   total  : stage1 3�????    //   valid  : pe_valid -> adder_val1 -> o_valid (2????��?��??
     // no clipping applied.
     // -------------------------------------------------------------------------
     reg                 adder_val1;
@@ -77,11 +75,12 @@ module pe_group #(
             r_add_stage1[0] <= 0;
             r_add_stage1[1] <= 0;
             r_add_stage1[2] <= 0;
+ 
             o_partial       <= 0;
             adder_val1      <= 0;
             o_valid         <= 0;
         end else begin
-            { adder_val1, o_valid } <= { pe_valid, adder_val1 };
+                        { adder_val1, o_valid } <= { pe_valid, adder_val1 };
 
             for (j = 0; j < 3; j = j + 1) begin
                 r_add_stage1[j] <= $signed(pe_output[3*j]) +
@@ -92,6 +91,7 @@ module pe_group #(
             o_partial <=  $signed(r_add_stage1[0]) +
                            $signed(r_add_stage1[1]) +
                            $signed(r_add_stage1[2]);
+
         end
     end
 
@@ -106,3 +106,4 @@ delay_shift #(
     );
 
 endmodule
+

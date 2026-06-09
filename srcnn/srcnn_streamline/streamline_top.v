@@ -37,7 +37,7 @@ module streamline_top #(
     ) u_global (
         .i_clk         (i_clk),
         .i_rstn        (i_rstn),
-        .i_system_start(i_system_start),
+        .i_start       (i_system_start),
 
         .i_l1_done     (w_l1_done),
         .i_l2_done     (w_l2_done),
@@ -51,7 +51,8 @@ module streamline_top #(
         .o_l2_image_bit(w_l2_imgbit),
         .o_l3_image_bit(w_l3_imgbit),
 
-        .o_system_done (o_system_done)
+        .o_img_done    (),
+        .o_all_done    (o_system_done)
     );
 
     // ====== intermid1_2 (L1_top owns W-port, L2_top drives R-port) ======

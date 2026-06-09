@@ -8,12 +8,12 @@
 //     - L1 weight BRAM    (64-bit Ã— 20,    INIT_FILE)
 //     - L1_local_FSM
 //     - L1_PU              (in_ch=1, out_ch=8 parallel)
-//     - intermid1_2 URAM  (128-bit Ã— 45000)  â† W-side here, R-port exposed for L2_top
+//     - intermid1_2 URAM  (128-bit Ã— 45000)  ?† W-side here, R-port exposed for L2_top
 //
 //   Memory layout (URAM):
-//     addr[15]   = image_bit          (ì´ë¯¸ì§€ ì˜ì—­ êµì°¨)
+//     addr[15]   = image_bit          (?´ë¯¸ì? ?˜?—­ êµì°¨)
 //     addr[14:0] = pixel_idx (0~22499) (raster order, 150Ã—150)
-//     data[127:0] = {ch7, ch6, ..., ch1, ch0}  (LSB ì•ˆë„ì— ch0; L2_PU.i_uram_data[16*i+:16] ê³¼ ì†ë„ì™€ ì¼ì¹˜)
+//     data[127:0] = {ch7, ch6, ..., ch1, ch0}  (LSB ?•ˆ?„?— ch0; L2_PU.i_uram_data[16*i+:16] ê³? ?†?„?? ?¼ì¹?)
 // -----------------------------------------------------------------------------
 
 module L1_top #(
@@ -51,7 +51,7 @@ module L1_top #(
     wire                  w_done;
 
     wire                  w_pixel_valid;
-    wire [127:0]          w_uram_data;
+    wire [127:0]          w_pixel_data;
     wire                  w_img_done;
 
     // --- padding mux (zero on pad region) ---
@@ -131,11 +131,11 @@ module L1_top #(
         .i_input_valid         (w_lb_valid),
         .i_pixel_data          (w_lb_data),
 
-        .i_w_rd_en             (w_w_rd_valid),     // 1clk-delayed weight rd_en â†’ align with rd_dout
+        .i_w_rd_en             (w_w_rd_valid),     // 1clk-delayed weight rd_en ?†’ align with rd_dout
         .i_weight_bram_data    (w_w_rd_dout),
 
         .o_pixel_valid         (w_pixel_valid),
-        .o_pixel_data          (w_uram_data),
+        .o_pixel_data           (w_pixel_data),
 
         .o_img_done            (w_img_done)
     );
@@ -164,7 +164,7 @@ module L1_top #(
         .clk      (i_clk),
         .wr_en    (w_pixel_valid),
         .wr_addr  (w_uram_wr_full_addr),
-        .wr_din   (w_uram_data),
+        .wr_din   (w_pixel_data),
         .rd_en    (i_l2_rd_en),
         .rd_addr  (i_l2_rd_addr),
         .rd_valid (o_l2_rd_valid),

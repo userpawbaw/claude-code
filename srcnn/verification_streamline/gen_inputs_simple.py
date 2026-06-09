@@ -36,7 +36,7 @@ def pack_word(slots_lsb_first):
 
 lines = []
 for tap in range(9):
-    w_val = 1 if tap == 4 else 0  # identity at center
+    w_val = 256 if tap == 4 else 0  # center tap = 1.0 in Q8.8 (256 raw) -> output = input
     # addr 2*tap: out_ch 0~3, all same w_val
     lines.append(pack_word([w_val, w_val, w_val, w_val]))
     # addr 2*tap+1: out_ch 4~7, all same w_val

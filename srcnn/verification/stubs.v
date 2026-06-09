@@ -23,7 +23,7 @@ module PE (
     input  wire signed [15:0] i_input,
     input  wire signed [15:0] i_weight,
     output reg                o_valid,
-    output wire signed [15:0] o_output
+    output wire signed [31:0] o_output
 );
     reg  signed [15:0] r_weight;
     reg  signed [31:0] w_output;   // DSP P (mreg, 1clk)
