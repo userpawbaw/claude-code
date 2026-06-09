@@ -101,7 +101,7 @@ always @(posedge i_clk or negedge i_rstn) begin
         o_is_pad_valid          <= 0;
         o_done                  <= 0;
     end else begin
-        o_is_pad_valid          <= o_is_pad;
+        o_is_pad_valid          <= w_valid_pad_area;
         o_is_pad                <= w_valid_pad_area;
         o_weight_bram_rd_en     <= 0;
         o_input_bram_rd_en      <= 0;

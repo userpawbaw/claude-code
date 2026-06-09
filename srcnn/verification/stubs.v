@@ -11,8 +11,8 @@
 // -----------------------------------------------------------------------------
 // PE : 실제 PE.v 동작 모사.
 //   weight stationary (i_en_w 래치). DSP = 1clk latency 곱셈기 (mreg only).
-//   o_output = o_valid ? {w_output[31], w_output[22:8]} : 0
-//     - 32-bit 곱(Q16.16) 에서 Q7.8(15bit) + 부호 1bit 추출 (PE.v 와 동치).
+//   o_output = o_valid ? w_output : 0
+//     - 16x16 signed → 32-bit Q16.16 전체 출력. 잘라내기는 PU에서만.
 //   o_valid <= i_en_i (1clk). w_output <= i_input * r_weight (1clk, CE=i_en_i).
 // -----------------------------------------------------------------------------
 module PE (
@@ -29,7 +29,7 @@ module PE (
     reg  signed [31:0] w_output;   // DSP P (mreg, 1clk)
     reg                clr;
 
-    assign o_output = o_valid ? {w_output[31], w_output[22:8]} : 16'sd0;
+    assign o_output = o_valid ? w_output : 32'sd0;
 
     always @(posedge i_clk or negedge i_rstn) begin
         if (~i_rstn) begin
@@ -155,6 +155,32 @@ module fifo_generator_0 #(
             if (wr_en && !(rd_en && cnt>0))      cnt <= cnt + 4;
             else if (wr_en && (rd_en && cnt>0))  cnt <= cnt + 3;
             else if (rd_en && cnt>0)             cnt <= cnt - 1;
+        end
+    end
+endmodule
+
+// -----------------------------------------------------------------------------
+// delay_shift : N-cycle shift register for 1-bit signals (en=1 always advances)
+// -----------------------------------------------------------------------------
+module delay_shift #(
+    parameter DELAY = 1
+)(
+    input  wire clk,
+    input  wire rst,
+    input  wire en,
+    input  wire din,
+    output wire dout
+);
+    reg [DELAY-1:0] sr;
+    assign dout = sr[DELAY-1];
+    integer d;
+    always @(posedge clk) begin
+        if (rst) begin
+            sr <= 0;
+        end else if (en) begin
+            sr[0] <= din;
+            for (d = 1; d < DELAY; d = d + 1)
+                sr[d] <= sr[d-1];
         end
     end
 endmodule
