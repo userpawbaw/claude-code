@@ -135,7 +135,7 @@ module L1_top #(
         .i_weight_bram_data    (w_w_rd_dout),
 
         .o_pixel_valid         (w_pixel_valid),
-        .o_uram_data           (w_uram_data),
+        .o_pixel_data          (w_uram_data),
 
         .o_img_done            (w_img_done)
     );
