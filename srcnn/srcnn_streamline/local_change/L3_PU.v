@@ -43,13 +43,15 @@ module L3_PU #(
     // --------------------------------------------------------
     // per-channel arrays
     // --------------------------------------------------------
-    wire [143:0]       w_line_data  [0:IN_CH-1];
-    wire               w_line_valid [0:IN_CH-1];
-    wire signed [31:0] w_partial    [0:IN_CH-1];
-    wire               w_pe_valid   [0:IN_CH-1];
-    wire               w_pe_done    [0:IN_CH-1];
-    wire               w_line_rd_done;
-    wire               w_img_done;
+    wire [143:0]       w_line_data       [0:IN_CH-1];
+    wire               w_line_valid      [0:IN_CH-1];
+    wire signed [31:0] w_partial         [0:IN_CH-1];
+    wire               w_pe_valid        [0:IN_CH-1];
+    wire               w_pe_done         [0:IN_CH-1];
+    wire [IN_CH-1:0]   w_line_rd_done_ch;
+    wire [IN_CH-1:0]   w_img_done_ch;
+    wire               w_line_rd_done = w_line_rd_done_ch[0];
+    wire               w_img_done     = w_img_done_ch[0];
 
     // --------------------------------------------------------
     // Weight Address Generation
@@ -100,8 +102,8 @@ module L3_PU #(
                 .i_input_data   (w_lb_data),
                 .o_line_data    (w_line_data[i]),
                 .o_line_valid   (w_line_valid[i]),
-                .o_line_rd_done (w_line_rd_done),
-                .o_img_done     (w_img_done)
+                .o_line_rd_done (w_line_rd_done_ch[i]),
+                .o_img_done     (w_img_done_ch[i])
             );
 
             pe_group pe_inst (
