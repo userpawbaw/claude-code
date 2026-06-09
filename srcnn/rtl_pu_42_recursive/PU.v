@@ -30,9 +30,9 @@
 module PU #(
     parameter MAX_CH     = 8,
     parameter LANES_WIDE = 8,
-    parameter LANES_L3   = 8,     // 4 → 8 (8-way L3 unroll)
+    parameter LANES_L3   = 4,     // 4-way L3 unroll
     parameter WIDE_BITS  = 128,   // 8 px × 16 (L1/L2)
-    parameter L3_BITS    = 128    // 8 px × 16 (L3 8-way LSB-aligned)
+    parameter L3_BITS    = 64     // 4 px × 16 (L3)
 )(
     input  wire                          i_clk,
     input  wire                          i_rstn,
@@ -57,9 +57,9 @@ module PU #(
     output wire                          o_img_done
 );
     localparam WIN_BITS_WIDE = 10*16;   // 160 b per row
-    localparam WIN_BITS_L3   = 10*16;   // 160 b per row (8-way: same width as WIDE)
+    localparam WIN_BITS_L3   = 6*16;    // 96 b per row (4-way: 3×6 window)
     localparam WIN_SIZE_WIDE = 3*WIN_BITS_WIDE;  // 480
-    localparam WIN_SIZE_L3   = 3*WIN_BITS_L3;    // 480
+    localparam WIN_SIZE_L3   = 3*WIN_BITS_L3;    // 288
 
     wire w_is_L1 = (i_layer_cnt == 2'd0);
     wire w_is_L2 = (i_layer_cnt == 2'd1);
@@ -161,10 +161,10 @@ module PU #(
                 .o_img_done     (w_lb_wide_imgd[g])
             );
 
-            // line_buffer_wide_l3_8x (3×10, 8-px shift, LSB-aligned) — active L3.
-            line_buffer_wide_l3_8x #(
-                .IMG_WIDTH(152), .WIN_ROW(3), .WIN_COL(10),
-                .SHIFT_STEP(8), .DATA_BIT(16), .LANE_NUM(LANES_L3)
+            // line_buffer_wide_l3 (3×6, 4-px shift) — active L3.
+            line_buffer_wide_l3 #(
+                .IMG_WIDTH(152), .WIN_ROW(3), .WIN_COL(6),
+                .SHIFT_STEP(4), .DATA_BIT(16), .LANE_NUM(LANES_L3)
             ) u_lb_l3 (
                 .i_clk          (i_clk),
                 .i_rstn         (i_rstn),
@@ -223,20 +223,25 @@ module PU #(
                                           wide_ml, wide_mc, wide_mr,
                                           wide_bl, wide_bc, wide_br };
 
-                // L3 path (8-way LSB-aligned): lane k → cols (9-k, 8-k, 7-k) of 10-col slice.
-                //   K=0 시 lane 0,1 은 stale 데이터를 conv → 결과 무의미하나 lane_valid mask 로 무시.
-                wire [15:0] l3_tl = s_l3_r2[(9-k)*16 +: 16];
-                wire [15:0] l3_tc = s_l3_r2[(8-k)*16 +: 16];
-                wire [15:0] l3_tr = s_l3_r2[(7-k)*16 +: 16];
-                wire [15:0] l3_ml = s_l3_r1[(9-k)*16 +: 16];
-                wire [15:0] l3_mc = s_l3_r1[(8-k)*16 +: 16];
-                wire [15:0] l3_mr = s_l3_r1[(7-k)*16 +: 16];
-                wire [15:0] l3_bl = s_l3_r0[(9-k)*16 +: 16];
-                wire [15:0] l3_bc = s_l3_r0[(8-k)*16 +: 16];
-                wire [15:0] l3_br = s_l3_r0[(7-k)*16 +: 16];
-                wire [143:0] sub_l3 = { l3_tl, l3_tc, l3_tr,
-                                        l3_ml, l3_mc, l3_mr,
-                                        l3_bl, l3_bc, l3_br };
+                // L3 path (4-way LSB-aligned): lane k (k<4) → cols (5-k, 4-k, 3-k) of 6-col slice.
+                //   lane k≥4 : 0 (PE 결과 무시).
+                wire [143:0] sub_l3;
+                if (k < LANES_L3) begin : gen_l3_active
+                    wire [15:0] l3_tl = s_l3_r2[(5-k)*16 +: 16];
+                    wire [15:0] l3_tc = s_l3_r2[(4-k)*16 +: 16];
+                    wire [15:0] l3_tr = s_l3_r2[(3-k)*16 +: 16];
+                    wire [15:0] l3_ml = s_l3_r1[(5-k)*16 +: 16];
+                    wire [15:0] l3_mc = s_l3_r1[(4-k)*16 +: 16];
+                    wire [15:0] l3_mr = s_l3_r1[(3-k)*16 +: 16];
+                    wire [15:0] l3_bl = s_l3_r0[(5-k)*16 +: 16];
+                    wire [15:0] l3_bc = s_l3_r0[(4-k)*16 +: 16];
+                    wire [15:0] l3_br = s_l3_r0[(3-k)*16 +: 16];
+                    assign sub_l3 = { l3_tl, l3_tc, l3_tr,
+                                      l3_ml, l3_mc, l3_mr,
+                                      l3_bl, l3_bc, l3_br };
+                end else begin : gen_l3_zero
+                    assign sub_l3 = 144'd0;
+                end
 
                 assign w_subwin[g][k] = w_is_L3 ? sub_l3 : sub_wide;
             end
@@ -289,7 +294,7 @@ module PU #(
     reg [1:0]         r_layer_s1, r_layer_s2;
     reg               r_valid_s1, r_valid_s2;
 
-    // L3 lane valid pipelined to align with stage 3.  8-way: width = LANES_L3 = 8.
+    // L3 lane valid pipelined to align with stage 3.  4-way: width = LANES_L3 = 4.
     // Must match L1/L2 path: delay_shift(3) to absorb pe_group latency, then 2 PU stages.
     reg [LANES_L3-1:0] r_l3_lane_v_s1, r_l3_lane_v_s2;
     wire [LANES_L3-1:0] w_lv_l3_pe;
@@ -455,9 +460,10 @@ module PU #(
                         end
                     end
                 end
-                2'd2: begin // L3 : oc slot 0 × 8 lane (8-way). per-lane mask from line buffer.
+                2'd2: begin // L3 : oc slot 0 × 4 lane (4-way). per-lane mask from line buffer.
                     o_oc_valid_mask <= 8'b00000001;
-                    o_lane_valid_mask[LANES_WIDE-1:0] <= r_l3_lane_v_s2;
+                    // lane 0..3 valid from r_l3_lane_v_s2, lane 4..7 invalid.
+                    o_lane_valid_mask[LANES_WIDE-1:0] <= { {(LANES_WIDE-LANES_L3){1'b0}}, r_l3_lane_v_s2 };
                     for (ok = 0; ok < LANES_L3; ok = ok + 1) begin
                         // L3 = bidirectional sat (no ReLU).
                         o_pixel_data[0*128 + (LANES_WIDE-1-ok)*16 +: 16] <=

@@ -115,7 +115,7 @@ module FSM_pad #(
     // stream length per layer
     localparam STREAM_L1_LEN = NPIX_IMG + 16'd2;    // 2890
     localparam STREAM_L2_LEN = NPIX_IMG + 16'd2;    // 2890
-    localparam STREAM_L3_LEN = NPIX_IMG + 16'd2;    // 2890 (8-way: every-clk read, same as L1/L2)
+    localparam STREAM_L3_LEN = NPIX_IMG * 16'd2 + 16'd2; // 5778 (4-way: every-other-clk read)
 
     wire [CNT_WIDTH-1:0] w_stream_len =
         (r_layer_cnt == 2'd2) ? STREAM_L3_LEN :
@@ -259,12 +259,14 @@ module FSM_pad #(
                             end
                         end
 
-                        2'd2 : begin // L3 (8-way) : URAM_L2 read every clk + 1 dummy.
-                            if (r_stream_cnt < NPIX_IMG) begin
-                                o_intermid_uram_rd_en   <= 1'b1;
-                                o_intermid_uram_rd_addr <= r_uram_addr;
-                                r_uram_addr             <= r_uram_addr + 1'b1;
-                            end else if (r_stream_cnt == NPIX_IMG + 1) begin
+                        2'd2 : begin // L3 (4-way) : URAM_L2 read every other clk + 1 dummy.
+                            if (r_stream_cnt < NPIX_IMG * 16'd2) begin
+                                if (r_stream_cnt[0] == 1'b0) begin
+                                    o_intermid_uram_rd_en   <= 1'b1;
+                                    o_intermid_uram_rd_addr <= r_uram_addr;
+                                    r_uram_addr             <= r_uram_addr + 1'b1;
+                                end
+                            end else if (r_stream_cnt == NPIX_IMG * 16'd2 + 1) begin
                                 o_input_dummy_valid <= 1'b1;
                             end
                         end

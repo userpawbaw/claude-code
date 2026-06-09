@@ -13,11 +13,8 @@ module tb_top2;
 
     wire img_done, all_done;
     wire pix_valid;
-    wire [127:0] pix_data;
-    wire [7:0]   lane_valid;
-    wire [127:0] out_word;
-    wire         out_we;
-    wire [3:0]   out_flush_cnt;
+    wire [63:0]  pix_data;
+    wire [3:0]   lane_valid;
 
     top dut (
         .i_clk           (clk),
@@ -27,10 +24,7 @@ module tb_top2;
         .o_all_done      (all_done),
         .o_pixel_valid   (pix_valid),
         .o_pixel_data    (pix_data),
-        .o_lane_valid    (lane_valid),
-        .o_out_word      (out_word),
-        .o_out_we        (out_we),
-        .o_out_flush_cnt (out_flush_cnt)
+        .o_lane_valid    (lane_valid)
     );
 
     // golden : 128-bit word arrays (preset 4_2).
@@ -104,86 +98,57 @@ module tb_top2;
         end
     end
 
-    // ---------- L3 output pixel-level comparison ----------
-    // o_pixel_data = 4 lanes × 16 bit per valid pulse.
-    // lane k → out_col = 4*emit_k - 2 + (3-k)  [k=0 is MSB=leftmost]
-    //   Wait, pix_data[63:48]=ok=0→lane0, pix_data[47:32]=lane1,
-    //         pix_data[31:16]=lane2, pix_data[15:0]=lane3.
-    //   lane_valid[k]: bit k of o_lane_valid (bit0=lane0 valid).
-    //   From line_buffer_wide_l3: lane k → out_col 4K-2+k.
-    //   But pix_data bit order: pix_data[63:48]=PU ok=0=lane0 → out_col 4K-2.
-    //                           pix_data[15:0] =PU ok=3=lane3 → out_col 4K+1.
-    // Compare only valid (row 1..150, col 1..149) pixels.
-    // Golden pixel: gold_out[img*WPCH + row*WPR + col/8], bit (7-col%8)*16+:16.
-
-    // L3 8-way counts.
+    // ---------- L3 output pixel-level comparison (4-way) ----------
+    //   o_pixel_data = 4 lanes × 16 bit per valid pulse.
+    //   pix_data[63:48]=lane0, [47:32]=lane1, [31:16]=lane2, [15:0]=lane3.
+    //   lane_valid[k]: bit k = lane k valid.
+    //   line_buffer_wide_l3 : lane k → out_col = 4*emit_k - 2 + k.
+    //   emit_k = 0..37 per padded row (152/4 = 38).
+    //   Compare valid region: row 1..150 (padded), col 1..149.
+    //   Golden: gold_out[img*WPCH + row*WPR + col/8][(7-col%8)*16 +: 16].
     integer err_L3;
-    integer cnt_L3;          // raw pix_valid pulses
-    integer cnt_out_we;      // packer output we pulses
-    integer cnt_out_flush;   // flush emit count
+    integer cnt_L3;      // total pix_valid pulses
+    integer emit_k_L3;   // 0..37 per row
+    integer row_L3;
+    integer cur_img_L3;
+    integer lk, out_col;
+    reg [15:0] got_px, exp_px;
+    reg [127:0] g_word_L3;
+
     initial begin
-        err_L3=0; cnt_L3=0; cnt_out_we=0; cnt_out_flush=0;
+        err_L3=0; cnt_L3=0; emit_k_L3=0; row_L3=1; cur_img_L3=0;
     end
 
     always @(posedge clk) begin
-        if (pix_valid)               cnt_L3 = cnt_L3 + 1;
-        if (out_we) begin
-            cnt_out_we = cnt_out_we + 1;
-            if (out_flush_cnt != 4'd0) cnt_out_flush = cnt_out_flush + 1;
-        end
-    end
-
-    // ---------- L3 packer output VALUE comparison ----------
-    // Flat stream order: padded rows 1..150, padded cols 0..149 (150 px/row, row-major).
-    //   lane k → out col 8K-2+k; K=0 lanes 2..7 valid = padded cols 0..5.
-    //   flat_pos p → padded_row = 1+p/150, padded_col = p%150.
-    //   out_word MSB-first: out_word[(7-fi)*16 +: 16] = pixel fi in word.
-    //   Skip padded_col==0 (left-border: RTL non-zero, golden forced 0).
-    //   golden_out[img*WPCH + prow*WPR + pcol/8][(7-pcol%8)*16 +: 16].
-    integer l3_wc;          // word count within current image (reset after flush)
-    integer l3_img_out;     // current output image index (0..NIMG-1)
-    integer err_L3_val;     // value comparison errors
-    integer fi_v;
-    integer flat_p, prow_v, pcol_v, flush_n_v;
-    reg [15:0] got_v, exp_v;
-    initial begin l3_wc = 0; l3_img_out = 0; err_L3_val = 0; end
-
-    always @(posedge clk) begin
-        if (out_we && l3_img_out < NIMG) begin
-            flush_n_v = (out_flush_cnt == 4'd0) ? 8 : {28'd0, out_flush_cnt};
-            for (fi_v = 0; fi_v < flush_n_v; fi_v = fi_v + 1) begin
-                flat_p  = l3_wc * 8 + fi_v;
-                prow_v  = 1 + flat_p / 150;
-                pcol_v  = flat_p % 150;
-                if (pcol_v >= 1) begin
-                    exp_v = gold_out[l3_img_out * WPCH + prow_v * WPR + pcol_v / 8]
-                                    [(7 - pcol_v % 8) * 16 +: 16];
-                    got_v = out_word[(7 - fi_v) * 16 +: 16];
-                    if (got_v !== exp_v) begin
-                        if (err_L3_val < 8)
-                            $display("L3V ERR img=%0d orig_r=%0d orig_c=%0d got=%04x exp=%04x",
-                                l3_img_out, prow_v-1, pcol_v-1, got_v, exp_v);
-                        err_L3_val = err_L3_val + 1;
+        if (pix_valid) begin
+            for (lk = 0; lk < 4; lk = lk + 1) begin
+                if (lane_valid[lk]) begin
+                    out_col = 4*emit_k_L3 - 2 + lk;
+                    if (out_col >= 1 && out_col <= 149 && cur_img_L3 < NIMG) begin
+                        got_px = pix_data[(3-lk)*16 +: 16];
+                        g_word_L3 = gold_out[cur_img_L3*WPCH + row_L3*WPR + out_col/8];
+                        exp_px = g_word_L3[(7 - out_col%8)*16 +: 16];
+                        if (got_px !== exp_px) begin
+                            if (err_L3 < 8)
+                                $display("L3 ERR img=%0d row=%0d col=%0d got=%04x exp=%04x",
+                                    cur_img_L3, row_L3, out_col, got_px, exp_px);
+                            err_L3 = err_L3 + 1;
+                        end
                     end
                 end
             end
-            if (out_flush_cnt != 4'd0) begin
-                l3_wc      = 0;
-                l3_img_out = l3_img_out + 1;
-            end else begin
-                l3_wc = l3_wc + 1;
+            cnt_L3 = cnt_L3 + 1;
+            emit_k_L3 = emit_k_L3 + 1;
+            if (emit_k_L3 == 38) begin
+                emit_k_L3 = 0;
+                row_L3    = row_L3 + 1;
             end
         end
-    end
-
-    // ---------- DEBUG probe : L3 img_done / flush timing ----------
-    always @(posedge clk) begin
-        if (dut.w_pu_img_done)
-            $display("[%0t] PU_IMG_DONE layer=%0d img=%0d  pack_rcnt=%0d",
-                $time, dut.w_layer_cnt, dut.w_img_cnt, dut.u_pack_l3.r_cnt);
-        if (dut.w_pack_flush)
-            $display("[%0t] PACK_FLUSH layer=%0d pack_rcnt=%0d i_en=%b",
-                $time, dut.w_layer_cnt, dut.u_pack_l3.r_cnt, dut.o_pixel_valid);
+        if (img_done) begin
+            cur_img_L3 = cur_img_L3 + 1;
+            emit_k_L3  = 0;
+            row_L3     = 1;
+        end
     end
 
     // ---------- periodic status ----------
@@ -206,16 +171,15 @@ module tb_top2;
         rstn = 1;  @(posedge clk);
         start = 1; @(posedge clk); start = 0;
 
-        repeat(110000) @(posedge clk);
+        repeat(120000) @(posedge clk);
 
         $display("");
         $display("=== RESULT ===");
         $display("all_done=%b", all_done);
         $display("L1 : %0d writes, %0d errors", cnt_L1, err_L1);
         $display("L2 : %0d writes, %0d errors", cnt_L2, err_L2);
-        $display("L3 : %0d raw pulses, %0d packer words (%0d flush), %0d cnt_err, %0d val_err",
-                 cnt_L3, cnt_out_we, cnt_out_flush, err_L3, err_L3_val);
-        if (err_L1 == 0 && err_L2 == 0 && err_L3 == 0 && err_L3_val == 0 && all_done)
+        $display("L3 : %0d valid pulses, %0d errors", cnt_L3, err_L3);
+        if (err_L1 == 0 && err_L2 == 0 && err_L3 == 0 && all_done)
             $display("PASS");
         else
             $display("FAIL");

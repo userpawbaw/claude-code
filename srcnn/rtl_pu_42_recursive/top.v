@@ -30,14 +30,10 @@ module top #(
     input  wire        i_start,
     output wire        o_img_done,
     output wire        o_all_done,
-    // L3 raw stream (debug / direct consume) — 8 lane × 16 bit + mask.
-    output wire         o_pixel_valid,
-    output wire [127:0] o_pixel_data,
-    output wire [7:0]   o_lane_valid,
-    // Output URAM port (packed 8 px / word, post-packer + flush).
-    output wire [127:0] o_out_word,
-    output wire         o_out_we,
-    output wire [3:0]   o_out_flush_cnt
+    // L3 raw stream — 4 lane × 16 bit + per-px valid (외부 64→16 FIFO 연결).
+    output wire        o_pixel_valid,
+    output wire [63:0] o_pixel_data,
+    output wire [3:0]  o_lane_valid
 );
     // ------------------------------------------------------------------
     // FSM signals
@@ -218,17 +214,51 @@ module top #(
     endgenerate
 
     // ------------------------------------------------------------------
-    // L3 path : URAM_L2 128b/ch (8 px) → PU 직접 공급 (every-clk read, no depacker).
-    //   L3 line_buffer_wide_l3_8x 가 8 px/clk shift in 처리.
+    // L3 path depacker : URAM_L2 128b/ch (8 px) → 4 px/clk via half-toggle.
+    //   FSM가 L3 동안 intermid_uram_rd_en 을 every-other clk 으로 토글.
+    //   URAM read 결과 latch → r_l3_half=0 → upper 64b (px 0..3),
+    //   r_l3_half=1 → lower 64b (px 4..7). 매 clk r_l3_in_valid 로 line_buffer 공급.
     //   2 banks active (L3_IC = 2). 나머지 슬롯은 0.
     // ------------------------------------------------------------------
-    wire [MAX_CH*128-1:0] w_pu_data_l3;
+    reg [127:0] r_l3_word [0:MAX_CH-1];
+    reg         r_l3_half;
+    reg         r_l3_in_valid;
+
+    integer hi;
+    always @(posedge i_clk or negedge i_rstn) begin
+        if (~i_rstn) begin
+            for (hi = 0; hi < MAX_CH; hi = hi + 1) r_l3_word[hi] <= 0;
+            r_l3_half     <= 0;
+            r_l3_in_valid <= 0;
+        end else if (w_IDLE_rst || w_dispatch_rst) begin
+            for (hi = 0; hi < MAX_CH; hi = hi + 1) r_l3_word[hi] <= 0;
+            r_l3_half     <= 0;
+            r_l3_in_valid <= 0;
+        end else if (w_layer_cnt == 2'd2) begin
+            if (w_uram_L2_rd_valid[0]) begin
+                for (hi = 0; hi < L3_IC; hi = hi + 1) r_l3_word[hi] <= w_uram_L2_dout[hi];
+                r_l3_half     <= 0;
+                r_l3_in_valid <= 1'b1;   // upper half
+            end else if (r_l3_in_valid && r_l3_half == 1'b0) begin
+                r_l3_half     <= 1'b1;
+                r_l3_in_valid <= 1'b1;   // lower half
+            end else begin
+                r_l3_in_valid <= 1'b0;
+            end
+        end else begin
+            r_l3_in_valid <= 1'b0;
+        end
+    end
+
+    // 4-px-per-ch slice : upper 64b = px 0..3 (LSB-aligned in line buffer).
+    wire [MAX_CH*64-1:0] w_pu_data_l3;
     generate
         for (b = 0; b < MAX_CH; b = b + 1) begin : gen_l3_slice
             if (b < L3_IC) begin : gen_l3_active
-                assign w_pu_data_l3[((MAX_CH-1)-b)*128 +: 128] = w_uram_L2_dout[b];
+                assign w_pu_data_l3[((MAX_CH-1)-b)*64 +: 64] =
+                    r_l3_half ? r_l3_word[b][63:0] : r_l3_word[b][127:64];
             end else begin : gen_l3_zero
-                assign w_pu_data_l3[((MAX_CH-1)-b)*128 +: 128] = 128'h0;
+                assign w_pu_data_l3[((MAX_CH-1)-b)*64 +: 64] = 64'h0;
             end
         end
     endgenerate
@@ -261,7 +291,7 @@ module top #(
     wire w_pu_input_valid =
         (w_layer_cnt == 2'd0) ? (w_i_rd_valid | w_input_dummy_valid) :
         (w_layer_cnt == 2'd1) ? (w_uram_L1_rd_valid[0] | w_input_dummy_valid) :
-                                (w_uram_L2_rd_valid[0] | w_input_dummy_valid);
+                                (r_l3_in_valid | w_input_dummy_valid);
 
     // ------------------------------------------------------------------
     // PU
@@ -310,43 +340,11 @@ module top #(
     endgenerate
 
     // ------------------------------------------------------------------
-    // L3 raw stream : oc 0 slot, 8 px × 16 bit + per-px valid.
+    // L3 final output : oc 0 slot, 4 px × 16 bit (= 64 bit) + per-px valid.
+    //   slot 0 MSB 4 lane (= lane 0..3) → bits [127:64] of pixel_data.
     // ------------------------------------------------------------------
     assign o_pixel_valid = (w_layer_cnt == 2'd2) && w_pu_emit_valid && w_pu_oc_mask[0];
-    assign o_pixel_data  = w_pu_pixel_data[0 +: 128];
-    assign o_lane_valid  = w_pu_lane_mask[7:0];
-
-    // ------------------------------------------------------------------
-    // L3 packer (8-way) : 6/8 valid 스트림 → 8-px word stream.
-    //   flush : o_pixel_valid 하강엣지(+1 clk) 기준으로 발생.
-    //           delay-count 방식은 dummy i_en 추가 사이클에 취약하므로
-    //           실제 신호 기반으로 타이밍 확정.
-    // ------------------------------------------------------------------
-    reg  r_pix_valid_d1;
-    always @(posedge i_clk or negedge i_rstn)
-        r_pix_valid_d1 <= i_rstn ? o_pixel_valid : 1'b0;
-
-    // falling edge of o_pixel_valid while processing L3 → flush 1 cycle later
-    wire w_pix_fall = r_pix_valid_d1 && !o_pixel_valid && (w_layer_cnt == 2'd2);
-    wire w_pack_flush;
-    delay_shift #(.DELAY(1)) u_flush_dly (
-        .clk  (i_clk),
-        .rst  (~i_rstn),
-        .en   (1'b1),
-        .din  (w_pix_fall),
-        .dout (w_pack_flush)
-    );
-
-    packer_l3_8x u_pack_l3 (
-        .i_clk        (i_clk),
-        .i_rstn       (i_rstn),
-        .i_en         (o_pixel_valid),
-        .i_data       (o_pixel_data),
-        .i_lane_valid (o_lane_valid),
-        .i_flush      (w_pack_flush),
-        .o_data       (o_out_word),
-        .o_we         (o_out_we),
-        .o_flush_cnt  (o_out_flush_cnt)
-    );
+    assign o_pixel_data  = w_pu_pixel_data[0 + (4*16) +: 64];   // lane 0..3
+    assign o_lane_valid  = w_pu_lane_mask[3:0];
 
 endmodule
