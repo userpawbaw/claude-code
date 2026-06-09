@@ -69,10 +69,10 @@ module simple_dual_port_uram #(
 )(
     input  wire                     clk,
     input  wire                     wr_en,
-    input  wire [12:0]              wr_addr,
+    input  wire [14:0]              wr_addr,
     input  wire [WIDTH-1:0]         wr_din,
     input  wire                     rd_en,
-    input  wire [12:0]              rd_addr,
+    input  wire [14:0]              rd_addr,
     output reg                      rd_valid,
     output reg  [WIDTH-1:0]         rd_dout
 );
@@ -129,6 +129,58 @@ module fifo_generator_0 #(
             if (wr_en && !(rd_en && cnt>0))      cnt <= cnt + 4;
             else if (wr_en && (rd_en && cnt>0))  cnt <= cnt + 3;
             else if (rd_en && cnt>0)             cnt <= cnt - 1;
+        end
+    end
+endmodule
+
+module fifo_generator_1 #(
+    parameter DEPTH = 8192
+)(
+    input  wire        clk,
+    input  wire        srst,
+    input  wire [63:0] din,
+    input  wire        wr_en,
+    input  wire        rd_en,
+    output reg  [15:0] dout,
+    output wire        full,
+    output wire        empty,
+    output reg         valid,
+    output reg         underflow,
+    output wire        wr_rst_busy,
+    output wire        rd_rst_busy
+);
+    reg [15:0] mem [0:DEPTH-1];
+    integer wptr, rptr, cnt;
+    assign full        = (cnt >= DEPTH - 4);
+    assign empty       = (cnt == 0);
+    assign wr_rst_busy = 1'b0;
+    assign rd_rst_busy = 1'b0;
+    initial begin wptr=0; rptr=0; cnt=0; dout=0; valid=0; underflow=0; end
+    always @(posedge clk) begin
+        if (srst) begin
+            wptr<=0; rptr<=0; cnt<=0; dout<=0; valid<=0; underflow<=0;
+        end else begin
+            valid     <= 0;
+            underflow <= 0;
+            if (wr_en && !full) begin
+                mem[wptr]            <= din[63:48];
+                mem[(wptr+1)%DEPTH]  <= din[47:32];
+                mem[(wptr+2)%DEPTH]  <= din[31:16];
+                mem[(wptr+3)%DEPTH]  <= din[15:0];
+                wptr <= (wptr+4) % DEPTH;
+            end
+            if (rd_en) begin
+                if (cnt > 0) begin
+                    dout  <= mem[rptr];
+                    rptr  <= (rptr+1) % DEPTH;
+                    valid <= 1;
+                end else begin
+                    underflow <= 1;
+                end
+            end
+            if      ( wr_en && !full &&  (rd_en && cnt>0)) cnt <= cnt + 3;
+            else if ( wr_en && !full && !(rd_en && cnt>0)) cnt <= cnt + 4;
+            else if (!wr_en           &&  (rd_en && cnt>0)) cnt <= cnt - 1;
         end
     end
 endmodule
