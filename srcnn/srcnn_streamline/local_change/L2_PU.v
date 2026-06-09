@@ -41,9 +41,9 @@ module L2_PU #(
 
     // =========================================================================
     // Weight Address Generation
-    //   - æ¹²ê³—?? registered group_en/tap_en?? ï§??cycle???ë³??Š‚???captureåª›Â? 1 cycle late??„?’— è¸°ê¾§? ‡ ??‰ë¼???    //     combinational decodeæ¿????„? ™ (weight_addråª›Â? ?ê¾©ì˜± bus mem[weight_addr]?????‡±?Š‚)
+    //   - æ¹²ê³—?? registered group_en/tap_en?? ï¿½??cycle???ï¿½??ï¿½ï¿½???captureåª›ï¿½? 1 cycle late??ï¿½ï¿½?ï¿½ï¿½ è¸°ê¾§?ï¿½ï¿½ ??ï¿½ï¿½ï¿½???    //     combinational decodeï¿½????ï¿½ï¿½?ï¿½ï¿½ (weight_addråª›ï¿½? ?ê¾©ì˜± bus mem[weight_addr]?????ï¿½ï¿½?ï¿½ï¿½)
     //   - clk:weight_data(W_In_Out_Tap) -> 0: w000 w100 w200 w300, 1: w400 w500 w600 w700, 2: w001 w101 w201 w301
-    //   - i_w_rd_en??18clk??ˆˆë¸? ?³ì’–ì­? ??2clkï§ëˆ?– tap ??’—ë´???    // =========================================================================
+    //   - i_w_rd_en??18clk??ï¿½ï¿½ï¿½? ?ï¿½ì’–ï¿½? ??2clkï§ëˆ?ï¿½ï¿½ tap ??ï¿½ï¿½ï¿½???    // =========================================================================
     reg [5:0]       weight_addr;
     always @(posedge i_clk or negedge i_rstn) begin
         if (~i_rstn)        weight_addr <= 0;
@@ -52,7 +52,7 @@ module L2_PU #(
     end
 
     // L2: weight_addr 0~17 = weight, 18 = bias word
-    // bias word?ë¨?ê½???tap_en ?ë¨?ë¿? 0 (9bit << 9 overflow) ??PE no capture
+    // bias word?ï¿½?ï¿½???tap_en ?ï¿½?ï¿½? 0 (9bit << 9 overflow) ??PE no capture
     wire is_w_phase = i_w_rd_en && (weight_addr < 18);
     wire [IN_CH-1:0]    w_weight_group_en  = is_w_phase ? { {4{weight_addr[0]}}, {4{~weight_addr[0]}} } : {IN_CH{1'b0}};
     wire [8:0]          w_weight_tap_en    = is_w_phase ? (9'b1 << weight_addr[4:1]) : 9'd0;
@@ -61,7 +61,7 @@ module L2_PU #(
     genvar i;
     generate
         for (i = 0; i < IN_CH; i = i + 1) begin : gen_ch
-            // padding mux per ch (1ch top è«›â‘¹?–‡)
+            // padding mux per ch (1ch top è«›â‘¹?ï¿½ï¿½)
             wire signed [15:0] w_lb_data;
             wire               w_lb_valid;
             assign w_lb_data  = i_is_pad_valid ? 16'h0 : i_uram_data[16*i +: 16];
@@ -104,7 +104,7 @@ module L2_PU #(
     assign o_pe_done      = w_pe_done[0];
 
     // =========================================================================
-    // [3] Channel Integration Adder Tree (?¨ë“¦ì»? è¹‚ë¬? ¹ 8ï§?ê¾¨ê¼¸ ??‘¹ê¶?)
+    // [3] Channel Integration Adder Tree (?ï¿½ë“¦ï¿½? è¹‚ë¬?ï¿½ï¿½ 8ï¿½?ê¾¨ê¼¸ ??ï¿½ï¿½ï¿½?)
     // =========================================================================
     reg signed [31:0] r_add_stage1 [0:3];
     reg signed [31:0] r_add_stage2 [0:1];
@@ -156,7 +156,7 @@ module L2_PU #(
     // [5] img_done propagation (for FSM)
     // =========================================================================
     delay_shift #(
-        .DELAY(3+3+2)
+        .DELAY(3+3+1)
     ) d3_line_buff_done_to_PU (
         .clk(i_clk),
         .rst(~i_rstn),

@@ -11,20 +11,20 @@ module L3_PU #(
     input  wire                          i_IDLE_rst,
 
     // 1. Feature Map Input (From L2 intermid2_3 URAMs, ch??1 URAM)
-    // L3_top?ë¨?ê½? 4 URAM dout(16bit åª›ê³´ì»?)????„êµ¹æ¿¡??‡¾? ë¼? 64bit packedæ¿???ê¾¨ë––.
-    // packing ??’–ê½?: LSBåª›Â? ch0 (L2_PU.i_uram_data ?ê¾©ìŸ¾ ??ˆˆ?”ª ?Œâ‘¤ê¹???
+    // L3_top?ï¿½?ï¿½? 4 URAM dout(16bit åª›ê³´ï¿½?)????ï¿½ï¿½êµ¹æ¿¡??ï¿½ï¿½?ï¿½ï¿½ï¿½? 64bit packedï¿½???ê¾¨ë––.
+    // packing ??ï¿½ï¿½ï¿½?: LSBåª›ï¿½? ch0 (L2_PU.i_uram_data ?ê¾©ìŸ¾ ??ï¿½ï¿½?ï¿½ï¿½ ?ï¿½â‘¤ï¿½???
     input  wire                          i_input_valid,
     input  wire [IN_CH*DATA_BIT-1:0]     i_uram_data,
     input  wire                          i_is_pad_valid,
 
     // 2. Weight & Bias Input (From FSM & L3 Weight BRAM)
-    // L3 weight ???? in_ch(4) * 3x3 * 16bit -> word(64bit)??4ch ??ˆˆ?–†, 1 word/tap
+    // L3 weight ???? in_ch(4) * 3x3 * 16bit -> word(64bit)??4ch ??ï¿½ï¿½?ï¿½ï¿½, 1 word/tap
     //   addr 0: w00 w10 w20 w30   (tap 0, in_ch 0~3)
     //   addr 1: w01 w11 w21 w31   (tap 1)
     //   ...
     //   addr 8: w08 w18 w28 w38   (tap 8)
     //   addr 9: b000 0000 0000 0000 (out_ch0 bias, zero packing, MSB ?ê¾©íŠ‚)
-    // -> 10 word/iter, out_ch=1????æ¿??iter ??1??(??’•?…‡????†?“¬)
+    // -> 10 word/iter, out_ch=1????ï¿½??iter ??1??(??ï¿½ï¿½?ï¿½ï¿½????ï¿½ï¿½?ï¿½ï¿½)
     input  wire                          i_w_rd_en,
     input  wire [W_BRAM_WIDTH-1:0]       i_weight_bram_data,
     input  wire                          i_bias_en,
@@ -33,8 +33,8 @@ module L3_PU #(
     output wire                          o_line_rd_done,
     output wire                          o_pe_done,
 
-    // 4. Final Output (?ëª???ë¨?ê½? ?ê¾©ì¿‚?”±? ??šŒ? …??Œë¼??? ??‰â” URAM ?ê³Œë¦° ??†?”  16bit + valid ï§???ê¾¨ë––)
-    // ReLU ??†?“¬. saturation?? ??‰?Ÿ¾????‹ë¸¿ (Q8.8 è¸°ë¶¿? è¸°ì?¬ë¼±??„?ˆƒ sat).
+    // 4. Final Output (?ï¿½???ï¿½?ï¿½? ?ê¾©ì¿‚?ï¿½ï¿½? ??ï¿½ï¿½?ï¿½ï¿½??ï¿½ï¿½ï¿½??? ??ï¿½â” URAM ?ê³Œë¦° ??ï¿½ï¿½?ï¿½ï¿½ 16bit + valid ï¿½???ê¾¨ë––)
+    // ReLU ??ï¿½ï¿½?ï¿½ï¿½. saturation?? ??ï¿½ï¿½?ï¿½ï¿½????ï¿½ë¸¿ (Q8.8 è¸°ë¶¿?ï¿½ï¿½ è¸°ï¿½?ï¿½ë¼±??ï¿½ï¿½?ï¿½ï¿½ sat).
     output reg                           o_pixel_valid,
     output reg  [15:0]                   o_pixel_data,
     output wire                          o_img_done
@@ -54,9 +54,9 @@ module L3_PU #(
     // --------------------------------------------------------
     // Weight Address Generation
     // --------------------------------------------------------
-    // L3: 1 word/tap ????æ¿??ï§??cycle tap_en shift, group_en ?´?‰í…‡ ?ê¾©ìŠ‚ ??†?“¬.
-    // 4ch ?ê¾?? åª›ìˆˆ? tap_en??è«›ì†ë¸? ?ë¨?ë¦? lane??weightï§??latch.
-    // weight_addr 0~8: tap 0~8 / weight_addr 9: bias word (PE??ï§?ë¨??Š‚ ???? FSM i_bias_en??‡°ì¤? r_biasï§??latch)
+    // L3: 1 word/tap ????ï¿½??ï¿½??cycle tap_en shift, group_en ?ï¿½ï¿½?ï¿½í…‡ ?ê¾©ìŠ‚ ??ï¿½ï¿½?ï¿½ï¿½.
+    // 4ch ?ï¿½?? åª›ìˆˆ? tap_en??è«›ì†ï¿½? ?ï¿½?ï¿½? lane??weightï¿½??latch.
+    // weight_addr 0~8: tap 0~8 / weight_addr 9: bias word (PE??ï¿½?ï¿½??ï¿½ï¿½ ???? FSM i_bias_en??ï¿½ï¿½ï¿½? r_biasï¿½??latch)
     reg [3:0]       weight_addr;
     reg [8:0]       r_weight_tap_en;
 
@@ -67,7 +67,7 @@ module L3_PU #(
         end else begin
             if (i_w_rd_en) begin
                 weight_addr     <= weight_addr + 1;
-                r_weight_tap_en <= r_weight_tap_en << 1; // 9bit????æ¿??tap 8 ??…¼?“¬ shift??„?ˆƒ ?ë¨?ë¿? ??š®?ˆ‡
+                r_weight_tap_en <= r_weight_tap_en << 1; // 9bit????ï¿½??tap 8 ??ï¿½ï¿½?ï¿½ï¿½ shift??ï¿½ï¿½?ï¿½ï¿½ ?ï¿½?ï¿½? ??ï¿½ï¿½?ï¿½ï¿½
             end else begin
                 weight_addr     <= 0;
                 r_weight_tap_en <= 9'b1;
@@ -81,7 +81,7 @@ module L3_PU #(
     genvar i;
     generate
         for (i = 0; i < IN_CH; i = i + 1) begin : gen_ch
-            // padding mux per channel (FSM pad ?ê³¸ë¿­?ë¨?ê½? zero äºŒì‡±?—¯)
+            // padding mux per channel (FSM pad ?ê³¸ë¿­?ï¿½?ï¿½? zero äºŒì‡±?ï¿½ï¿½)
             wire signed [15:0] w_lb_data;
             wire               w_lb_valid;
             assign w_lb_data  = i_is_pad_valid ? 16'h0 : i_uram_data[16*i +: 16];
@@ -109,8 +109,8 @@ module L3_PU #(
                 .i_rstn         (i_rstn),
                 .i_line_valid   (w_line_valid[i]),
                 .i_line_data    (w_line_data[i]),
-                .i_weight       (i_weight_bram_data[16*i +: 16]), // ï§?ê¾¨ê¼¸è¹???¨ì¢? ™ lane
-                .i_w_tap_en     (r_weight_tap_en),                  // 4ch ?¨ë“¯?„»
+                .i_weight       (i_weight_bram_data[16*i +: 16]), // ï¿½?ê¾¨ê¼¸ï¿½???ï¿½ì¢?ï¿½ï¿½ lane
+                .i_w_tap_en     (r_weight_tap_en),                  // 4ch ?ï¿½ë“¯?ï¿½ï¿½
                 .i_line_done    (w_line_rd_done),
                 .o_valid        (w_pe_valid[i]),
                 .o_partial      (w_partial[i]),
@@ -141,8 +141,8 @@ module L3_PU #(
     // --------------------------------------------------------
     // [4] Bias Latch & Saturation Truncate (no ReLU)
     // --------------------------------------------------------
-    // bias ?ê¾©íŠ‚: L2_PU?? ??ˆˆ?”ª??„ì¾? MSB 16bit (i_weight_bram_data[63 -: DATA_BIT])
-    // sum -> Q8.8 window {sign[31], [22:8]} ?•°ë¶¿í…§. ?????ë¬’ã ??…»ì¾???š®ì¤???sat.
+    // bias ?ê¾©íŠ‚: L2_PU?? ??ï¿½ï¿½?ï¿½ï¿½??ï¿½ï¿½ï¿½? MSB 16bit (i_weight_bram_data[63 -: DATA_BIT])
+    // sum -> Q8.8 window {sign[31], [22:8]} ?ï¿½ï¿½ë¶¿í…§. ?????ë¬’ã ??ï¿½ï¿½ï¿½???ï¿½ï¿½ï¿½???sat.
     reg signed [15:0] r_bias;
     wire signed [31:0] w_final_sum_q8_8 = ( $signed(r_add_stage2)>>>8 ) + $signed(r_bias);
 
@@ -171,7 +171,7 @@ module L3_PU #(
     //  pipeline: pe_group 3 + adder tree 2 + bias+output 2 = 7clk
     // --------------------------------------------------------
     delay_shift #(
-        .DELAY(3+2+2)
+        .DELAY(3+2+1)
     ) d_l3_img_done (
         .clk(i_clk),
         .rst(~i_rstn),

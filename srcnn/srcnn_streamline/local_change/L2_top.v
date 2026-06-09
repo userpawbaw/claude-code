@@ -185,6 +185,13 @@ module L2_top #(
         end
     endgenerate
 
-    assign o_done = w_done;
+    // FSM_pad fires o_done once per out_ch iteration (4 times total per image).
+    // global_FSM expects one done pulse per image, so only expose the 4th pulse.
+    reg [1:0] r_done_cnt;
+    always @(posedge i_clk or negedge i_rstn) begin
+        if (~i_rstn) r_done_cnt <= 2'd0;
+        else if (w_done) r_done_cnt <= r_done_cnt + 2'd1;
+    end
+    assign o_done = w_done & (r_done_cnt == 2'd3);
 
 endmodule

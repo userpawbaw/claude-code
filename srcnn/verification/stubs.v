@@ -22,13 +22,13 @@ module PE (
     input  wire signed [15:0] i_input,
     input  wire signed [15:0] i_weight,
     output reg                o_valid,
-    output wire signed [15:0] o_output
+    output wire signed [31:0] o_output
 );
     reg  signed [15:0] r_weight;
     reg  signed [31:0] w_output;   // DSP P (mreg, 1clk)
     reg                clr;
 
-    assign o_output = o_valid ? {w_output[31], w_output[14:0]} : 16'sd0;
+    assign o_output = o_valid ? w_output : 32'sd0;
 
     always @(posedge i_clk or negedge i_rstn) begin
         if (~i_rstn) begin

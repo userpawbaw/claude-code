@@ -15,7 +15,7 @@ module L1_PU #(
     
     // input 
     input  wire                         i_input_valid,
-    input  wire [DATA_BIT-1:0]          i_pixel_data, // L1?? ??‘¥?”ª ï§?ê¾¨ê¼¸(16bit) ??‚…? °
+    input  wire [DATA_BIT-1:0]          i_pixel_data, // L1?? ??ï¿½ï¿½?ï¿½ï¿½ ï¿½?ê¾¨ê¼¸(16bit) ??ï¿½ï¿½?ï¿½ï¿½
     
     // 2. Weight & Bias en & data
     input  wire                         i_w_rd_en, 
@@ -31,7 +31,7 @@ module L1_PU #(
 
     // =========================================================================
     // 1. Weight & Bias Enable Control Logic
-    //   - æ¹²ê³—?? registered group_en/tap_en?? ï§??cycle???ë³??Š‚???ï§â‘¤ë±? captureåª›Â? 1 cycle late??„?’— è¸°ê¾§? ‡åª›Â? ??‰ë¼???    //     combinational decode è«›â‘¹?–‡??‡°ì¤? ??„? ™ (weight_addråª›Â? ?ê¾©ì˜± bus mem[weight_addr]?????‡±?Š‚)
+    //   - æ¹²ê³—?? registered group_en/tap_en?? ï¿½??cycle???ï¿½??ï¿½ï¿½???ï§â‘¤ï¿½? captureåª›ï¿½? 1 cycle late??ï¿½ï¿½?ï¿½ï¿½ è¸°ê¾§?ï¿½ï¿½åª›ï¿½? ??ï¿½ï¿½ï¿½???    //     combinational decode è«›â‘¹?ï¿½ï¿½??ï¿½ï¿½ï¿½? ??ï¿½ï¿½?ï¿½ï¿½ (weight_addråª›ï¿½? ?ê¾©ì˜± bus mem[weight_addr]?????ï¿½ï¿½?ï¿½ï¿½)
     // =========================================================================
     reg [4:0]       weight_addr;
     always @(posedge i_clk or negedge i_rstn) begin
@@ -68,7 +68,7 @@ module L1_PU #(
     wire               w_line_rd_done;
     wire               w_img_done;
 
-    // L1: in_Ch 1åª??(Line buffer LUT ï§¤ì’–?Ÿ»?ë·?ë¹???è¹‚ë¬? ¹ï§£ì„?”???ë£? ?º?????ë¦? ??
+    // L1: in_Ch 1ï¿½??(Line buffer LUT ï§¤ì’–?ï¿½ï¿½?ï¿½?ï¿½???è¹‚ë¬?ï¿½ï¿½ï§£ì„?ï¿½ï¿½???ï¿½? ?ï¿½ï¿½?????ï¿½? ??
     line_buffer_improved #(
         .IMG_WIDTH(152),
         .WIN_ROW(3),
@@ -94,18 +94,18 @@ module L1_PU #(
     generate
         for (j = 0; j < OUT_CH; j = j + 1) begin : gen_pe_groups
             pe_group #(
-                .IN_CN(1) // L2 è«›â‘¹?–‡??ï§ã…¼ë¬?
+                .IN_CN(1) // L2 è«›â‘¹?ï¿½ï¿½??ï§ã…¼ï¿½?
             ) pe_inst (
                 .i_clk          (i_clk),
                 .i_rstn         (i_rstn),
-                // ??‡±?”¤è¸°ê¾ª? data??out_Ch 8åª??PE group ?¨ë“¯?„»
+                // ??ï¿½ï¿½?ï¿½ï¿½è¸°ê¾ª?ï¿½ï¿½ data??out_Ch 8ï¿½??PE group ?ï¿½ë“¯?ï¿½ï¿½
                 .i_line_valid   (w_line_valid),
                 .i_line_data    (w_line_data),
                 .i_weight       (i_weight_bram_data[16*(j%4) +: 16]),
                 .i_w_tap_en     ({9{w_weight_group_en[j]}} & w_weight_tap_en),
                 .i_line_done    (w_line_rd_done),
                 .o_valid        (w_pe_valid[j]),
-                .o_partial      (w_partial[j]), // L1?? ??‹¿ì¾? ï§¤ì’–ì¥? Conv ??‘¹ê¶›åª›ë¯ªì—«(?•°ë¶?? adder_tree ?ê¾©ìŠ‚ x)
+                .o_partial      (w_partial[j]), // L1?? ??ï¿½ï¿½ï¿½? ï§¤ì’–ï¿½? Conv ??ï¿½ï¿½ê¶›åª›ë¯ªì—«(?ï¿½ï¿½ï¿½?? adder_tree ?ê¾©ìŠ‚ x)
                 .o_pe_done      (w_pe_done[j])
             );
         end
@@ -133,7 +133,7 @@ module L1_PU #(
             o_pixel_valid <= 0;
             o_pixel_data   <= 0;
         end else begin
-            o_pixel_valid <= w_pe_valid[0]; // ï§â‘¤ë±? PE valid ?ì¢ìƒ‡ ??ˆˆ?”ª
+            o_pixel_valid <= w_pe_valid[0]; // ï§â‘¤ï¿½? PE valid ?ì¢ìƒ‡ ??ï¿½ï¿½?ï¿½ï¿½
             o_pixel_data   <= w_final_concat;
         end
     end
