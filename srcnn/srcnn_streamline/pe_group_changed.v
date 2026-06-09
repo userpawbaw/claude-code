@@ -34,7 +34,7 @@ module pe_group #(
     input  wire                 i_line_done,
     // partial sum 출력 (채널 누적 전, 공간 9-tap 합)
     output reg                  o_valid,          // 기존 adder_val_final 타이밍
-    output reg  signed [20:0]   o_partial,         // 기존 r_add_total 과 동일 비트폭/의미
+    output reg  signed [31:0]   o_partial,         // 기존 r_add_total 과 동일 비트폭/의미
     output wire                 o_pe_done
     
 );
