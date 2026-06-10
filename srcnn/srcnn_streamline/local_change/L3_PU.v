@@ -66,14 +66,12 @@ module L3_PU #(
         if (~i_rstn) begin
             weight_addr     <= 0;
             r_weight_tap_en <= 9'b1;
-        end else begin
-            if (i_w_rd_en) begin
-                weight_addr     <= weight_addr + 1;
-                r_weight_tap_en <= r_weight_tap_en << 1; // 9bit????�??tap 8 ??��?�� shift??��?�� ?�?�? ??��?��
-            end else begin
-                weight_addr     <= 0;
-                r_weight_tap_en <= 9'b1;
-            end
+        end else if (i_IDLE_rst) begin
+            weight_addr     <= 0;
+            r_weight_tap_en <= 9'b1;
+        end else if (i_w_rd_en) begin
+            weight_addr     <= weight_addr + 1;
+            r_weight_tap_en <= r_weight_tap_en << 1; // 9bit????�??tap 8 ??��?�� shift??��?�� ?�?�? ??��?��
         end
     end
 
