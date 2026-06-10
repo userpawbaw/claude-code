@@ -13,7 +13,7 @@ module tb_streamline_2img;
     streamline_top #(
         .MEM_ADDR   (15),
         .N_IMG      (2),
-        .L1_IMG_INIT("input_real_2img.txt"),
+        .L1_IMG_INIT("input_real_1img.txt"),
         .L1_W_INIT  ("weight_l1_real.txt"),
         .L2_W_INIT  ("weight_l2_real.txt"),
         .L3_W_INIT  ("weight_l3_real.txt")
@@ -46,7 +46,7 @@ module tb_streamline_2img;
     end
 
     reg [15:0] golden [0:NPIX_TOT-1];
-    initial $readmemh("golden_2img.txt", golden);
+    initial $readmemh("golden_2img_same.txt", golden);
 
     integer i, errors, errors_img0, errors_img1, bit_flip_idx;
 
