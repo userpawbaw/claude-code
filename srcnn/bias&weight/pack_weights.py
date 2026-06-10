@@ -222,7 +222,81 @@ def pack_streamline_8_4():
             f.write(pack64_lsb(w) + "\n")
     print(f"[streamline 8_4 L3] {out3}  ({L3_WORDS} words)")
 
+# ============================================================
+# 4) unroll 4_2  (srcnn/rtl_pu_42_unroll)
+#    W1: (4,1,9), W2: (2,4,9), W3: (1,2,9)
+#    Layout (128-bit × 30 words, slot 0 = MSB) :
+#      addr 0..8  : L1 weight tap n. slot 0..3 = oc 0..3, slot 4..7 = 0
+#      addr 9     : L1 bias.         slot 0..3 = B1[0..3]
+#      addr 10..18: L2 weight tap n. slot 0..3 = oc=0 ic 0..3,
+#                                    slot 4..7 = oc=1 ic 0..3
+#      addr 19    : L2 bias.         slot 0 = B2[0], slot 1 = B2[1]
+#      addr 20..28: L3 weight tap n. slot 0..1 = ic 0..1, slot 2..7 = 0
+#      addr 29    : L3 bias.         slot 0 = B3[0]
+# ============================================================
+def pack_unroll_4_2():
+    (W1, W2, W3), (B1, B2, B3) = load_layer("4_2", oc=(4,2,1), ic=(1,4,2))
+    N_WORDS = 30
+    words = [[0]*8 for _ in range(N_WORDS)]
+    # L1
+    for n in range(9):
+        for oc in range(4):
+            words[n][oc] = W1[oc, 0, n]
+    for oc in range(4):
+        words[9][oc] = B1[oc]
+    # L2 : slot 0..3 = oc=0 ic 0..3, slot 4..7 = oc=1 ic 0..3
+    for n in range(9):
+        for ic in range(4):
+            words[10 + n][ic]     = W2[0, ic, n]   # oc=0
+            words[10 + n][4 + ic] = W2[1, ic, n]   # oc=1
+    words[19][0] = B2[0]
+    words[19][1] = B2[1]
+    # L3 : slot 0..1 = ic 0..1
+    for n in range(9):
+        for ic in range(2):
+            words[20 + n][ic] = W3[0, ic, n]
+    words[29][0] = B3[0]
+    out = os.path.join(REPO_ROOT, "rtl_pu_42_unroll", "work", "weight.txt")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    with open(out, "w") as f:
+        for w in words:
+            f.write(pack128_msb(w) + "\n")
+    print(f"[unroll 4_2] {out}  ({N_WORDS} words)")
+
+# ============================================================
+# 5) unroll 8_8  (srcnn/rtl_pu_88_unroll)
+#    레이아웃은 recursive 8_8 과 동일 (128-bit × 93 word). 파일 경로만 다름.
+# ============================================================
+def pack_unroll_8_8():
+    (W1, W2, W3), (B1, B2, B3) = load_layer("8_8", oc=(8,8,1), ic=(1,8,8))
+    N_WORDS = 93
+    words = [[0]*8 for _ in range(N_WORDS)]
+    for n in range(9):
+        for oc in range(8):
+            words[n][oc] = W1[oc, 0, n]
+    for oc in range(8):
+        words[9][oc] = B1[oc]
+    for k in range(8):
+        base = 10 + k*9
+        for n in range(9):
+            for ic in range(8):
+                words[base + n][ic] = W2[k, ic, n]
+    for s in range(8):
+        words[82][s] = B2[s]
+    for n in range(9):
+        for ic in range(8):
+            words[83 + n][ic] = W3[0, ic, n]
+    words[92][0] = B3[0]
+    out = os.path.join(REPO_ROOT, "rtl_pu_88_unroll", "work", "weight.txt")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    with open(out, "w") as f:
+        for w in words:
+            f.write(pack128_msb(w) + "\n")
+    print(f"[unroll 8_8] {out}  ({N_WORDS} words)")
+
 if __name__ == "__main__":
     pack_recursive_4_2()
     pack_recursive_8_8()
     pack_streamline_8_4()
+    pack_unroll_4_2()
+    pack_unroll_8_8()
