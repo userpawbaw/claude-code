@@ -1,33 +1,34 @@
 `timescale 1ns / 1ps
-// out_buf.v — L3 64-bit/clk 출력 → BRAM 버퍼 → 16-bit/clk 직렬 스트림.
+// out_buf.v : L3 64-bit/clk output -> BRAM buffer -> 16-bit/clk serial stream.
 //
-// ── Write packer ─────────────────────────────────────────────────────────
-//   lane_valid 패턴 (line_buffer_wide_l3 기준):
-//     col_word=0: 4'b1100 → 2 valid px (lane 2, 3 = padded cols 0, 1)
-//     col_word=1..37: 4'b1111 → 4 valid px
-//   r_half / r_hold 2-phase 누적 → 22500 / 4 = 5625 word/image.
+// -- Write packer ----------------------------------------------------------
+//   lane_valid pattern (from line_buffer_wide_l3):
+//     col_word=0    : 4'b1100 -> 2 valid px (lanes 2,3 = padded cols 0,1)
+//     col_word=1..37: 4'b1111 -> 4 valid px
+//   2-phase accumulation via r_half / r_hold -> 22500 / 4 = 5625 words/image.
 //
-//   r_half 상태 전이 (img_done 에서 r_half=0 보장, 150 rows=짝수):
-//     r_half=0, 2valid : hold → r_half=1           (no write)
-//     r_half=0, 4valid : write {px0,px1,px2,px3}   (r_half stays 0)
-//     r_half=1, 2valid : write {hold,px2,px3}       (r_half→0)
-//     r_half=1, 4valid : write {hold,px0,px1}, hold {px2,px3} (r_half stays 1)
+//   r_half state transitions (r_half is 0 at img_done since 150 rows is even):
+//     r_half=0, 2valid : hold -> r_half=1                       (no write)
+//     r_half=0, 4valid : write {px0,px1,px2,px3}                (r_half stays 0)
+//     r_half=1, 2valid : write {hold,px2,px3}                   (r_half -> 0)
+//     r_half=1, 4valid : write {hold,px0,px1}, hold {px2,px3}   (r_half stays 1)
 //
-// ── BRAM bank ─────────────────────────────────────────────────────────────
-//   3-bank (NUM_IMG × 5625 words). r_wr_abs_addr 는 누적 (초기화 없음).
-//   Bank b: 절대 주소 b*5625 … (b+1)*5625-1.
-//   addr 충돌 없음 (3 image sim 한정; 프로덕션은 ping-pong+rd_done 필요).
+// -- BRAM bank -------------------------------------------------------------
+//   3 banks (NUM_IMG x 5625 words). r_wr_abs is monotonically incrementing.
+//   Bank b spans absolute addresses b*5625 .. (b+1)*5625-1.
+//   No address conflicts for the 3-image sim (production would need
+//   ping-pong + rd_done handshake).
 //
-// ── Read serializer ──────────────────────────────────────────────────────
-//   BRAM 읽기 지연 = 1 clk. 파이프라인:
-//     RS_IDLE  : img_done 대기.
-//     RS_START : rd_en[word 0] 발행.
-//     RS_START2: rd_valid[word 0]→r_cur; rd_en[word 1] 발행.
-//     RS_RUN   : rd_valid[word 1]→r_nxt; 출력 시작 (px_cnt=0).
-//       px_cnt=2: rd_en[word K+1] 선발행.
-//       px_cnt=3: rd_valid[word K+1]→r_nxt; r_cur←old r_nxt; px_cnt=0.
-//       5625 words 완료 → RS_DONE.
-//     RS_DONE  : o_img_done pulse 1 clk.
+// -- Read serializer -------------------------------------------------------
+//   BRAM read latency = 1 clk. Pipeline:
+//     RS_IDLE  : wait for img_done.
+//     RS_START : issue rd_en[word 0].
+//     RS_START2: rd_valid[word 0] -> r_cur; issue rd_en[word 1].
+//     RS_RUN   : rd_valid[word 1] -> r_nxt; start output (px_cnt=0).
+//       px_cnt=2: pre-issue rd_en[word K+1].
+//       px_cnt=3: rd_valid[word K+1] -> r_nxt; r_cur <- old r_nxt; px_cnt=0.
+//       After 5625 words -> RS_DONE.
+//     RS_DONE  : 1-clk o_img_done pulse.
 
 module out_buf #(
     parameter NPIX_IMG   = 22500,
@@ -48,7 +49,7 @@ module out_buf #(
     output reg         o_img_done
 );
     // -----------------------------------------------------------------------
-    // BRAM (64-bit × BRAM_DEPTH)
+    // BRAM (64-bit x BRAM_DEPTH)
     // -----------------------------------------------------------------------
     reg          r_bram_wr_en;
     reg  [AW-1:0] r_bram_wr_addr;

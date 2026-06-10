@@ -1,29 +1,13 @@
 `timescale 1ns / 1ps
-//////////////////////////////////////////////////////////////////////////////////
-// Company: 
-// Engineer: 
-// 
-// Create Date: 2026/05/30 23:57:52
-// Design Name: 
-// Module Name: fifo_to_uram
-// Project Name: 
-// Target Devices: 
-// Tool Versions: 
-// Description: 
-// 
-// Dependencies: 
-// 
-// Revision:
-// Revision 0.01 - File Created
-// Additional Comments:
-// 
-//////////////////////////////////////////////////////////////////////////////////
+// fifo_add_to_uram : pack 4 consecutive 16-bit results into a 64-bit URAM word.
+// Used by L3 (4-way) output path. Asserts o_uram_we for 1 clk when the 4th
+// sample arrives.
 module fifo_add_to_uram (
     input  wire        i_clk,
     input  wire        i_rstn,
-    input  wire        i_fifo_en,       // adder_tree_valid와 매칭 (여기서는 adder_val_final)
-    input  wire [15:0] i_data,          // adder_tree의 최종 16비트 출력 데이터
-    output reg  [63:0] o_output_uram,   // URAM 데이터 입력 포트로 연결
+    input  wire        i_fifo_en,       // matches adder_tree_valid (here, adder_val_final)
+    input  wire [15:0] i_data,          // 16-bit output from adder_tree
+    output reg  [63:0] o_output_uram,   // wires to URAM data-in port
     output reg         o_uram_we        // URAM Write Enable
 );
 
@@ -44,7 +28,7 @@ assign out_visual[3] = o_output_uram[63:48];
             o_output_uram <= 64'h0;
             o_uram_we     <= 1'b0;
         end else begin
-            o_uram_we <= 1'b0; // Pulse 형태로 유지하기 위해 디폴트 clear
+            o_uram_we <= 1'b0; // default-clear so the signal remains a 1-clk pulse
 
             if (i_fifo_en) begin
                 fifo_64  <= {fifo_64[47:0], i_data};

@@ -1,24 +1,24 @@
 `timescale 1ns / 1ps
 // FSM_pad (preset 4_2 UNROLL, no L2 time-mux).
 //
-// Channel chain : 1 → 4 → 2 → 1. L2 OC는 공간 병렬 → out_ch_cnt 사용 안함.
+// Channel chain : 1 -> 4 -> 2 -> 1. L2 OCs run in parallel, so out_ch_cnt is unused.
 //
-// 단계별 시퀀스 (per layer) :
-//   S_IDLE → S_W_READ → S_I_STREAM → S_DRAIN → S_DONE
+// Per-layer sequence :
+//   S_IDLE -> S_W_READ -> S_I_STREAM -> S_DRAIN -> S_DONE
 //
-//   S_W_READ   : weight 9 + bias 1 = 10 cycle 로딩.
-//                L1 : addr 0..8 weight + 9  bias.
-//                L2 : addr 10..18 weight + 19 bias.
-//                L3 : addr 20..28 weight + 29 bias.
+//   S_W_READ   : load 9 weight taps + 1 bias = 10 cycles.
+//                L1 : addr 0..8 weight, addr 9  bias.
+//                L2 : addr 10..18 weight, addr 19 bias.
+//                L3 : addr 20..28 weight, addr 29 bias.
 //   S_I_STREAM :
-//                L1 : BRAM read 2888 cycle + 1 dummy.
-//                L2 : URAM_L1 read 2888 cycle + 1 dummy (단일 pass).
-//                L3 : URAM_L2 read every-other clk × 2888 reads = 5776 cycle.
-//   S_DRAIN    : 30 cycle 대기 후 i_pe_done 수신.
-//   S_DONE     : reset pulse 발생 → 다음 layer.
+//                L1 : BRAM read 2888 cycles + 1 dummy.
+//                L2 : URAM_L1 read 2888 cycles + 1 dummy (single pass).
+//                L3 : URAM_L2 read every other clk x 2888 reads = 5776 cycles.
+//   S_DRAIN    : wait 30 cycles, then receive i_pe_done.
+//   S_DONE     : emit reset pulse and advance to next layer.
 //
-// Note : pad_top/bot 제거. URAM auto-init=0 이므로 row 0/151 은 항상 0.
-//        top.v 에서 wr_addr 를 19 (WORDS_PER_ROW) 부터 시작시켜 row 1..150 만 기록.
+// Note : pad_top/bot removed. URAM auto-init=0 so rows 0 and 151 are always 0.
+//        top.v writes wr_addr starting from 19 (WORDS_PER_ROW) so only rows 1..150 are stored.
 
 module FSM_pad #(
     parameter PAD            = 1,

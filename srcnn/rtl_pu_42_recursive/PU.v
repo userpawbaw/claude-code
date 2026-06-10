@@ -1,38 +1,39 @@
 `timescale 1ns / 1ps
-// PU (preset 4_2 UNROLL) : L1 4-oc / L2 2-oc / L3 1-oc spatial parallel.
+// PU (preset 4_2 UNROLL) : 8x8 pe_group grid shared across L1, L2, L3.
 //
-//   pe_group grid = 8 × 8 = 64 instances (= MAX_CH × LANES_WIDE). 유지.
-//   각 layer 별 grid 의미 :
-//     L1 : g=0..3 = oc 0..3 (in_ch=1 broadcast). g=4..7 사용 안함.
-//     L2 : g=0..3 = oc=0 in_ch=0..3.  g=4..7 = oc=1 in_ch=0..3.
-//     L3 : g=0..1 = in_ch=0..1 (4 lane). g=2..7 사용 안함.
+// Channel config: L1 1->4, L2 4->2, L3 2->1.
 //
-//   PE 총량 (max instance) : 8 × 8 × 9 = 576 PE.
+// pe_group grid layout per layer (g = row index 0..7, k = lane index 0..7):
+//   L1 : row g=0..3 → out_ch 0..3 (single in_ch, broadcast). row g=4..7 unused.
+//   L2 : row g=0..3 → out_ch=0 with in_ch=g.
+//        row g=4..7 → out_ch=1 with in_ch=(g-4).  All 8 rows active.
+//   L3 : row g=0..1 → in_ch 0..1 (summed in Stage 1). row g=2..7 unused.
 //
-//   입력 (top.v 에서 layer별 적절히 라우팅) :
-//     - i_uram_data_wide [MAX_CH*128-1:0] : MAX_CH slot, slot 0 = MSB.
-//         L1 : slot[0] = 입력 broadcast, 나머지는 무시.
-//         L2 : slot[0..3] = in_ch 0..3, slot[4..7] = 0 (top.v 에서 0 으로 채움).
-//                PU 가 slot[g mod 4] 를 oc=1 용 line_buffer (g=4..7) 에도 라우팅.
-//     - i_uram_data_l3  [MAX_CH*64-1:0]   : L3 시 slot[0..1] = in_ch 0..1.
+// Total PE instances: 8 × 8 × 9 = 576.
 //
-//   weight BRAM data (i_weight_bram_data, 128b) 의 slot 매핑 :
-//     L1 tap n : slot[0..3] = W1[oc=0..3, 0, n].
-//     L2 tap n : slot[0..3] = W2[oc=0, ic=0..3, n].  slot[4..7] = W2[oc=1, ic=0..3, n].
-//     L3 tap n : slot[0..1] = W3[0, ic=0..1, n].
-//   PU 는 w_weight[g] = slot[g] (이미 그렇게 wiring) → 그대로 매핑.
+// Input routing (done in top.v before arriving here):
+//   i_uram_data_wide [MAX_CH*128-1:0] : slot 0 = MSB. slot index = g.
+//     L1 : slot 0 carries the input pixel, broadcast to all line buffers.
+//     L2 : slot 0..3 = in_ch 0..3 (same data replicated to slots 4..7 by top.v).
+//   i_uram_data_l3 [MAX_CH*64-1:0] : slot 0..1 = in_ch 0..1 (4 px per slot).
 //
-//   출력 :
-//     - o_oc_valid_mask : L1=4'b1111, L2=2'b11, L3=1'b1 (slot 0 만).
+// Weight BRAM slot mapping (slot 0 = MSB of 128-bit word):
+//   L1 tap n : slot 0..3 = W1[oc=0..3, tap=n].  slot 4..7 = 0 (zero-padded).
+//   L2 tap n : slot 0..3 = W2[oc=0, ic=0..3, n]. slot 4..7 = W2[oc=1, ic=0..3, n].
+//   L3 tap n : slot 0..1 = W3[ic=0..1, tap=n].   slot 2..7 = 0 (zero-padded).
+//   PU uses w_weight[g] = slot g, so the mapping matches naturally.
 //
-//   Pipeline (line_buffer 2-clk + pe_group 3-clk + PU Stage A/B/C 3-clk = 8-clk).
+// Output:
+//   o_oc_valid_mask : L1=8'b00001111 (4 oc), L2=8'b00000011 (2 oc), L3=8'b00000001.
+//
+// Pipeline: line_buffer 2 clk + pe_group 3 clk + Stage 1/2/3 3 clk = 8 clk total.
 
 module PU #(
     parameter MAX_CH     = 8,
     parameter LANES_WIDE = 8,
-    parameter LANES_L3   = 4,     // 4-way L3 unroll
-    parameter WIDE_BITS  = 128,   // 8 px × 16 (L1/L2)
-    parameter L3_BITS    = 64     // 4 px × 16 (L3)
+    parameter LANES_L3   = 4,
+    parameter WIDE_BITS  = 128,   // 8 px × 16 bit (L1/L2)
+    parameter L3_BITS    = 64     // 4 px × 16 bit (L3)
 )(
     input  wire                          i_clk,
     input  wire                          i_rstn,
@@ -57,7 +58,7 @@ module PU #(
     output wire                          o_img_done
 );
     localparam WIN_BITS_WIDE = 10*16;   // 160 b per row
-    localparam WIN_BITS_L3   = 6*16;    // 96 b per row (4-way: 3×6 window)
+    localparam WIN_BITS_L3   = 6*16;    // 96 b per row
     localparam WIN_SIZE_WIDE = 3*WIN_BITS_WIDE;  // 480
     localparam WIN_SIZE_L3   = 3*WIN_BITS_L3;    // 288
 
@@ -66,7 +67,7 @@ module PU #(
     wire w_is_L3 = (i_layer_cnt == 2'd2);
 
     // ------------------------------------------------------------------
-    // Weight tap dispatcher (동일 : 9 taps + bias, 1-hot tap_en)
+    // Weight tap dispatcher: 9 taps + 1 bias, 1-hot enable per tap.
     // ------------------------------------------------------------------
     reg [3:0]  r_tap_cnt;
     wire [8:0] w_tap_en =
@@ -79,7 +80,7 @@ module PU #(
             r_tap_cnt <= r_tap_cnt + 4'd1;
     end
 
-    // Per-channel weight slot (slot 0 = MSB).
+    // Per-row weight slot: slot 0 = MSB of 128-bit word, slot g at bits [(MAX_CH-1-g)*16 +: 16].
     wire signed [15:0] w_weight [0:MAX_CH-1];
     genvar gw;
     generate
@@ -89,7 +90,7 @@ module PU #(
     endgenerate
 
     // ------------------------------------------------------------------
-    // Bias latch (8 slot)
+    // Bias latch: 8 slots, loaded from weight BRAM bias word.
     // ------------------------------------------------------------------
     reg signed [15:0] r_bias [0:MAX_CH-1];
     integer bi;
@@ -102,20 +103,20 @@ module PU #(
         end
     end
 
-    // L2 bias : slot 0 = oc=0 bias, slot 1 = oc=1 bias.
-    wire signed [15:0] w_L2_bias0 = r_bias[0];
-    wire signed [15:0] w_L2_bias1 = r_bias[1];
+    // L2 has 2 out_ch → bias slot 0 for oc=0, slot 1 for oc=1.
+    wire signed [15:0] w_bias_L2_oc0 = r_bias[0];
+    wire signed [15:0] w_bias_L2_oc1 = r_bias[1];
 
     // ------------------------------------------------------------------
-    // Per-channel input mux + line buffers
-    //   L1 : ch 0 (= MSB slot of i_uram_data_wide) broadcast to all 8 ch.
-    //   L2 : ch g = i_uram_data_wide[ g-th 128b ].
-    //   L3 : ch g = i_uram_data_l3 [ g-th 64b ].
+    // Per-channel input mux + line buffers.
+    //   L1 : slot 0 of i_uram_data_wide broadcast to all 8 line_buffer_wide.
+    //   L2 : g=0..3 → in_ch g.  g=4..7 → in_ch (g-4), replicating for oc=1 rows.
+    //   L3 : slot g of i_uram_data_l3 → line_buffer_wide_l3[g].
     // ------------------------------------------------------------------
     wire [WIDE_BITS-1:0] w_lb_wide_in   [0:MAX_CH-1];
     wire [L3_BITS-1:0]   w_lb_l3_in     [0:MAX_CH-1];
 
-    wire [WIN_SIZE_WIDE-1:0] w_lb_wide_data [0:MAX_CH-1];
+    wire [WIN_SIZE_WIDE-1:0] w_lb_wide_data  [0:MAX_CH-1];
     wire [LANES_WIDE-1:0]    w_lb_wide_lane_v[0:MAX_CH-1];
     wire                     w_lb_wide_valid [0:MAX_CH-1];
     wire                     w_lb_wide_done  [0:MAX_CH-1];
@@ -128,15 +129,13 @@ module PU #(
     wire                     w_lb_l3_imgd   [0:MAX_CH-1];
 
     genvar g;
-    // L2 in_ch mux : g=0..3 → in_ch g, g=4..7 → in_ch (g-4) (replicated for oc=1).
-    //   slot ordering : slot index 0 = MSB. ch g lives at slot index g
-    //                 → bits [(MAX_CH-1-g)*WIDE_BITS +: WIDE_BITS].
+    // L2 in_ch index: rows g=0..3 read in_ch=g, rows g=4..7 read in_ch=(g-4).
     generate
         for (g = 0; g < MAX_CH; g = g + 1) begin : gen_lb_mux
-            wire [3:0] l2_ic_idx = g[2] ? (g - 4) : g;   // 0..3 for both halves
+            wire [3:0] l2_in_ch = g[2] ? (g - 4) : g;
             assign w_lb_wide_in[g] = w_is_L1
-                ? i_uram_data_wide[(MAX_CH-1)*WIDE_BITS +: WIDE_BITS]            // L1 broadcast
-                : i_uram_data_wide[((MAX_CH-1)-l2_ic_idx)*WIDE_BITS +: WIDE_BITS]; // L2
+                ? i_uram_data_wide[(MAX_CH-1)*WIDE_BITS +: WIDE_BITS]               // L1: broadcast slot 0
+                : i_uram_data_wide[((MAX_CH-1)-l2_in_ch)*WIDE_BITS +: WIDE_BITS];   // L2: per in_ch
             assign w_lb_l3_in[g] =
                 i_uram_data_l3[((MAX_CH-1)-g)*L3_BITS +: L3_BITS];
         end
@@ -144,7 +143,7 @@ module PU #(
 
     generate
         for (g = 0; g < MAX_CH; g = g + 1) begin : gen_lb
-            // line_buffer_wide (3×10, 8-px shift) — active L1/L2.
+            // line_buffer_wide (3×10, 8-px shift) — used for L1 and L2.
             line_buffer_wide #(
                 .IMG_WIDTH(152), .WIN_ROW(3), .WIN_COL(10),
                 .SHIFT_STEP(8), .DATA_BIT(16), .LANE_NUM(LANES_WIDE)
@@ -161,7 +160,7 @@ module PU #(
                 .o_img_done     (w_lb_wide_imgd[g])
             );
 
-            // line_buffer_wide_l3 (3×6, 4-px shift) — active L3.
+            // line_buffer_wide_l3 (3×6, 4-px shift) — used for L3 only.
             line_buffer_wide_l3 #(
                 .IMG_WIDTH(152), .WIN_ROW(3), .WIN_COL(6),
                 .SHIFT_STEP(4), .DATA_BIT(16), .LANE_NUM(LANES_L3)
@@ -181,26 +180,21 @@ module PU #(
     endgenerate
 
     // ------------------------------------------------------------------
-    // Window mux + 3×3 sub-window extraction (per ch, per lane).
-    //   line_buffer_wide   : 3×10 win. lane k (k=0..7) sub-window cols win[9-k, 8-k, 7-k].
-    //   line_buffer_wide_l3: 3×6  win. lane k (k=0..3) sub-window cols win[5-k, 4-k, 3-k]
-    //                                  lane k (k=4..7) → 0.
-    // ------------------------------------------------------------------
-    // Per-row 160-bit (wide) / 96-bit (l3) slice access helper :
-    //   row_idx 0 = bottom (newest), 1 = middle, 2 = top (oldest).
-    //   col_idx 0 = LSB pixel (newest), max = MSB pixel (oldest).
+    // 3×3 sub-window extraction per (ch, lane).
+    //   line_buffer_wide   (3×10 window):
+    //     lane k → cols (9-k, 8-k, 7-k). Packed as {top, mid, bot} row-major.
+    //   line_buffer_wide_l3 (3×6 window):
+    //     lane k (k<4) → cols (5-k, 4-k, 3-k).  lane k>=4 → zero (L3 uses 4 lanes only).
     //
-    //   sub-window pack order for pe_group (= tap 0..8, MSB→LSB) :
-    //     {tl, tc, tr, ml, mc, mr, bl, bc, br}   (row-major top→bot, left→right).
-
-    // window data per (ch, lane), 144-bit each.
+    //   Sub-window bit order for pe_group (tap 0..8, MSB first):
+    //     {tl, tc, tr,  ml, mc, mr,  bl, bc, br}  (top-left to bottom-right).
+    //   row_idx 0 = newest (bottom), 2 = oldest (top).
+    // ------------------------------------------------------------------
     wire [143:0] w_subwin [0:MAX_CH-1][0:LANES_WIDE-1];
 
-    // helper macros expand in generate.
     genvar k;
     generate
         for (g = 0; g < MAX_CH; g = g + 1) begin : gen_subwin_ch
-            // Slices per row from each line buffer.
             wire [WIN_BITS_WIDE-1:0] s_wide_r0 = w_lb_wide_data[g][0*WIN_BITS_WIDE +: WIN_BITS_WIDE];
             wire [WIN_BITS_WIDE-1:0] s_wide_r1 = w_lb_wide_data[g][1*WIN_BITS_WIDE +: WIN_BITS_WIDE];
             wire [WIN_BITS_WIDE-1:0] s_wide_r2 = w_lb_wide_data[g][2*WIN_BITS_WIDE +: WIN_BITS_WIDE];
@@ -209,7 +203,7 @@ module PU #(
             wire [WIN_BITS_L3-1:0]   s_l3_r2   = w_lb_l3_data[g][2*WIN_BITS_L3 +: WIN_BITS_L3];
 
             for (k = 0; k < LANES_WIDE; k = k + 1) begin : gen_subwin_lane
-                // L1/L2 path : lane k → cols (9-k, 8-k, 7-k) of 10-col slice.
+                // L1/L2: lane k → cols (9-k, 8-k, 7-k) of 10-col window.
                 wire [15:0] wide_tl = s_wide_r2[(9-k)*16 +: 16];
                 wire [15:0] wide_tc = s_wide_r2[(8-k)*16 +: 16];
                 wire [15:0] wide_tr = s_wide_r2[(7-k)*16 +: 16];
@@ -223,8 +217,7 @@ module PU #(
                                           wide_ml, wide_mc, wide_mr,
                                           wide_bl, wide_bc, wide_br };
 
-                // L3 path (4-way LSB-aligned): lane k (k<4) → cols (5-k, 4-k, 3-k) of 6-col slice.
-                //   lane k≥4 : 0 (PE 결과 무시).
+                // L3: lane k (k<4) → cols (5-k, 4-k, 3-k) of 6-col window.
                 wire [143:0] sub_l3;
                 if (k < LANES_L3) begin : gen_l3_active
                     wire [15:0] l3_tl = s_l3_r2[(5-k)*16 +: 16];
@@ -249,13 +242,12 @@ module PU #(
     endgenerate
 
     // ------------------------------------------------------------------
-    // pe_group : 8 per ch × 8 ch = 64 instances (per-lane).
+    // pe_group instances: 8 ch × 8 lanes = 64 total.
     // ------------------------------------------------------------------
-    wire               w_pe_valid     [0:MAX_CH-1][0:LANES_WIDE-1];
-    wire signed [31:0] w_pe_partial   [0:MAX_CH-1][0:LANES_WIDE-1];
-    wire               w_pe_done      [0:MAX_CH-1][0:LANES_WIDE-1];
+    wire               w_pe_valid   [0:MAX_CH-1][0:LANES_WIDE-1];
+    wire signed [31:0] w_pe_partial [0:MAX_CH-1][0:LANES_WIDE-1];
+    wire               w_pe_done    [0:MAX_CH-1][0:LANES_WIDE-1];
 
-    // line_buffer_valid (active per layer) drives pe_group.
     wire w_line_valid_ch [0:MAX_CH-1];
     wire w_line_imgd_ch  [0:MAX_CH-1];
     generate
@@ -285,17 +277,17 @@ module PU #(
     endgenerate
 
     // ------------------------------------------------------------------
-    // Stage 1/2/3 pipeline — per (oc/ch, lane).
-    //   L1 : oc g = ch g. Per (oc, lane) : partial → bias add → sat.
-    //   L2/L3 : oc = i_out_ch_cnt. Per lane : sum over 8 ch → bias add → sat.
+    // Stage 1/2/3 pipeline.
+    //   Stage 1: partial sums across pe_group rows (in_ch reduction).
+    //   Stage 2: arithmetic right-shift by 8 (Q16.16 → Q8.8) + bias add.
+    //   Stage 3: saturation and output pack.
     // ------------------------------------------------------------------
     reg signed [31:0] r_add_stage1 [0:MAX_CH-1][0:LANES_WIDE-1];
     reg signed [31:0] r_add_total  [0:MAX_CH-1][0:LANES_WIDE-1];
     reg [1:0]         r_layer_s1, r_layer_s2;
     reg               r_valid_s1, r_valid_s2;
 
-    // L3 lane valid pipelined to align with stage 3.  4-way: width = LANES_L3 = 4.
-    // Must match L1/L2 path: delay_shift(3) to absorb pe_group latency, then 2 PU stages.
+    // L3 lane_valid delayed to align with Stage 3 output (3 clk pe_group + 2 clk stage1/2 = 5 clk).
     reg [LANES_L3-1:0] r_l3_lane_v_s1, r_l3_lane_v_s2;
     wire [LANES_L3-1:0] w_lv_l3_pe;
     delay_shift #(.WIDTH(LANES_L3), .DELAY(3)) u_lv_l3_pe_dly (
@@ -304,8 +296,7 @@ module PU #(
         .dout(w_lv_l3_pe)
     );
 
-    // L1/L2 lane valid (from line_buffer_wide ch 0). Same emit pattern across ch.
-    // PE+adder = 3 clk delay then Stage A/B = 2 more = 5 clk before Stage 3 uses it.
+    // L1/L2 lane_valid: same 3+2 clk delay path.
     wire [LANES_WIDE-1:0] w_lv_wide_pe;
     delay_shift #(.WIDTH(LANES_WIDE), .DELAY(3)) u_lv_pe_dly (
         .clk(i_clk), .rst(~i_rstn), .en(1'b1),
@@ -340,10 +331,10 @@ module PU #(
             r_lv_wide_s1   <= w_lv_wide_pe;
             r_lv_wide_s2   <= r_lv_wide_s1;
 
-            // ---- Stage 1 : per (oc, lane) pair sum or pass ----
+            // ---- Stage 1: partial sum across pe_group rows ----
             for (sk = 0; sk < LANES_WIDE; sk = sk + 1) begin
                 case (i_layer_cnt)
-                    2'd0: begin // L1 : pass through per oc.
+                    2'd0: begin // L1: no in_ch reduction, pass partial per oc.
                         r_add_stage1[0][sk] <= w_pe_partial[0][sk];
                         r_add_stage1[1][sk] <= w_pe_partial[1][sk];
                         r_add_stage1[2][sk] <= w_pe_partial[2][sk];
@@ -353,9 +344,9 @@ module PU #(
                         r_add_stage1[6][sk] <= w_pe_partial[6][sk];
                         r_add_stage1[7][sk] <= w_pe_partial[7][sk];
                     end
-                    2'd1: begin // L2 : pair sum within each oc half.
-                        //   stage1[0] = oc=0 (ic0+ic1), stage1[1] = oc=0 (ic2+ic3)
-                        //   stage1[2] = oc=1 (ic0+ic1), stage1[3] = oc=1 (ic2+ic3)
+                    2'd1: begin // L2: pair sum within each oc half.
+                        // stage1[0] = oc=0 (ic0+ic1), stage1[1] = oc=0 (ic2+ic3)
+                        // stage1[2] = oc=1 (ic0+ic1), stage1[3] = oc=1 (ic2+ic3)
                         r_add_stage1[0][sk] <= w_pe_partial[0][sk] + w_pe_partial[1][sk];
                         r_add_stage1[1][sk] <= w_pe_partial[2][sk] + w_pe_partial[3][sk];
                         r_add_stage1[2][sk] <= w_pe_partial[4][sk] + w_pe_partial[5][sk];
@@ -365,7 +356,7 @@ module PU #(
                         r_add_stage1[6][sk] <= 0;
                         r_add_stage1[7][sk] <= 0;
                     end
-                    2'd2: begin // L3 : pair sum (g=0,1 only) → stage1[0] = ic0+ic1.
+                    2'd2: begin // L3: sum g=0,1 (ic0+ic1) → stage1[0].
                         r_add_stage1[0][sk] <= w_pe_partial[0][sk] + w_pe_partial[1][sk];
                         r_add_stage1[1][sk] <= 0;
                         r_add_stage1[2][sk] <= 0;
@@ -381,10 +372,10 @@ module PU #(
                 endcase
             end
 
-            // ---- Stage 2 : (>>>8) + bias ----
+            // ---- Stage 2: 4-way sum (where needed) + >>8 + bias ----
             for (sk = 0; sk < LANES_WIDE; sk = sk + 1) begin
                 case (r_layer_s1)
-                    2'd0: begin // L1 : 4 oc per-oc bias. slot 4..7 unused (= 0).
+                    2'd0: begin // L1: >>8 + per-oc bias. Slots 4..7 inactive.
                         r_add_total[0][sk] <= (r_add_stage1[0][sk] >>> 8) + $signed({{16{r_bias[0][15]}}, r_bias[0]});
                         r_add_total[1][sk] <= (r_add_stage1[1][sk] >>> 8) + $signed({{16{r_bias[1][15]}}, r_bias[1]});
                         r_add_total[2][sk] <= (r_add_stage1[2][sk] >>> 8) + $signed({{16{r_bias[2][15]}}, r_bias[2]});
@@ -394,14 +385,14 @@ module PU #(
                         r_add_total[6][sk] <= 0;
                         r_add_total[7][sk] <= 0;
                     end
-                    2'd1: begin // L2 : 2 oc spatial. oc=0 = stage1[0]+stage1[1], oc=1 = stage1[2]+stage1[3].
+                    2'd1: begin // L2: 4-way sum (stage1[0..1] → oc=0, stage1[2..3] → oc=1) + >>8 + bias.
                         r_add_total[0][sk] <= ((r_add_stage1[0][sk] + r_add_stage1[1][sk]) >>> 8)
-                                            + $signed({{16{w_L2_bias0[15]}}, w_L2_bias0});
+                                            + $signed({{16{w_bias_L2_oc0[15]}}, w_bias_L2_oc0});
                         r_add_total[1][sk] <= ((r_add_stage1[2][sk] + r_add_stage1[3][sk]) >>> 8)
-                                            + $signed({{16{w_L2_bias1[15]}}, w_L2_bias1});
+                                            + $signed({{16{w_bias_L2_oc1[15]}}, w_bias_L2_oc1});
                         for (si = 2; si < MAX_CH; si = si + 1) r_add_total[si][sk] <= 0;
                     end
-                    2'd2: begin // L3 : 1 oc, ic 0+1 = stage1[0].
+                    2'd2: begin // L3: stage1[0] (ic0+ic1 already summed) + >>8 + bias.
                         r_add_total[0][sk] <= (r_add_stage1[0][sk] >>> 8)
                                             + $signed({{16{r_bias[0][15]}}, r_bias[0]});
                         for (si = 1; si < MAX_CH; si = si + 1) r_add_total[si][sk] <= 0;
@@ -415,7 +406,8 @@ module PU #(
     end
 
     // ------------------------------------------------------------------
-    // Stage 3 / Output : per (oc, lane) saturation, pack to 1024-bit.
+    // Stage 3: saturation clamp and output pack into 1024-bit word.
+    //   Pixel order in each 128-bit oc slot: lane 0 at MSB, lane 7 at LSB.
     // ------------------------------------------------------------------
     integer oi, ok;
     always @(posedge i_clk or negedge i_rstn) begin
@@ -431,7 +423,7 @@ module PU #(
             o_lane_valid_mask  <= 0;
 
             case (r_layer_s2)
-                2'd0: begin // L1 : 4 oc spatial × 8 lane. slot 0..3 active.
+                2'd0: begin // L1: 4 oc × 8 lane, ReLU sat. Slots 0..3 active.
                     o_oc_valid_mask <= 8'b00001111;
                     for (oi = 0; oi < 4; oi = oi + 1) begin
                         o_lane_valid_mask[oi*LANES_WIDE +: LANES_WIDE] <= r_lv_wide_s2;
@@ -446,7 +438,7 @@ module PU #(
                         end
                     end
                 end
-                2'd1: begin // L2 : 2 oc spatial × 8 lane. slot 0,1 active.
+                2'd1: begin // L2: 2 oc × 8 lane, ReLU sat. Slots 0..1 active.
                     o_oc_valid_mask <= 8'b00000011;
                     o_lane_valid_mask[0*LANES_WIDE +: LANES_WIDE] <= r_lv_wide_s2;
                     o_lane_valid_mask[1*LANES_WIDE +: LANES_WIDE] <= r_lv_wide_s2;
@@ -460,12 +452,10 @@ module PU #(
                         end
                     end
                 end
-                2'd2: begin // L3 : oc slot 0 × 4 lane (4-way). per-lane mask from line buffer.
+                2'd2: begin // L3: slot 0 × 4 lanes, bidirectional sat (no ReLU).
                     o_oc_valid_mask <= 8'b00000001;
-                    // lane 0..3 valid from r_l3_lane_v_s2, lane 4..7 invalid.
                     o_lane_valid_mask[LANES_WIDE-1:0] <= { {(LANES_WIDE-LANES_L3){1'b0}}, r_l3_lane_v_s2 };
                     for (ok = 0; ok < LANES_L3; ok = ok + 1) begin
-                        // L3 = bidirectional sat (no ReLU).
                         o_pixel_data[0*128 + (LANES_WIDE-1-ok)*16 +: 16] <=
                             (r_add_total[0][ok] >  32'sd32767) ? 16'sh7FFF :
                             (r_add_total[0][ok] < -32'sd32768) ? 16'sh8000 :
@@ -478,7 +468,7 @@ module PU #(
     end
 
     // ------------------------------------------------------------------
-    // o_img_done : ch 0 lane 0 의 pe_done 을 Stage 3 alignment 까지 지연 (+3).
+    // o_img_done: delay pe_done[0][0] by 3 clk to align with Stage 3 output.
     // ------------------------------------------------------------------
     delay_shift #(.DELAY(3)) u_done_dly (
         .clk  (i_clk),

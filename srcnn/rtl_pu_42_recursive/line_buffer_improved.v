@@ -4,7 +4,7 @@ module line_buffer_improved #(
     parameter WIN_COL     = 3,  
     parameter DATA_BIT    = 16,  
    
-    // 자동 계산
+    // derived
     parameter LINE_SIZE   = IMG_WIDTH * DATA_BIT,
     parameter WIN_SIZE    = WIN_ROW * WIN_COL * DATA_BIT
 )(
@@ -21,7 +21,7 @@ module line_buffer_improved #(
 );
 
     // -------------------------------------------------------------------------
-    // 1. 순수 시프트 레지스터 (가장 우측 LSB로 최신 데이터가 들어옴)
+    // 1. Pure shift registers (newest sample enters at the LSB end)
     // -------------------------------------------------------------------------
     (* shreg_extract = "yes" *) reg [LINE_SIZE-1:0] r_line0;
     (* shreg_extract = "yes" *) reg [LINE_SIZE-1:0] r_line1;
@@ -49,7 +49,7 @@ module line_buffer_improved #(
     end
 
     // -------------------------------------------------------------------------
-    // 2. 현재 입력 중인 픽셀의 절대 좌표 카운터 (0 ~ 151)
+    // 2. Absolute (row, col) counter for the currently-incoming pixel (0 ~ 151)
     // -------------------------------------------------------------------------
     reg [$clog2(IMG_WIDTH)-1:0] r_col;
     reg [15:0]                  r_row;
@@ -72,10 +72,10 @@ module line_buffer_improved #(
     end
 
 
-    // 현재 입력된 픽셀이 최소 3번째 줄(row>=2)이고, 최소 3번째 칸(col>=2)인가?
+    // Is the current pixel at least in the 3rd row (row>=2) and 3rd column (col>=2)?
     wire w_valid_in_window = (r_row >= WIN_ROW - 1) && (r_col >= WIN_COL - 1);
     reg r_valid;
-    // 현재 입력된 픽셀이 줄의 마지막 픽셀인가? (col==151)
+    // Is the current pixel the last column of the row? (col==151)
     wire w_done_in_window  = (r_row >= WIN_ROW - 1) && (r_col == IMG_WIDTH - 1);
     wire w_img_done        = (r_row == IMG_WIDTH);
     reg  r_done;
@@ -99,8 +99,8 @@ module line_buffer_improved #(
         end else begin
             //r_valid_in_window    <= (r_row >= WIN_ROW - 1) && (r_col >= WIN_COL - 1);
             //r_done_in_window     <= (r_row >= WIN_ROW - 1) && (r_col == IMG_WIDTH - 1);
-            // i_input_valid가 들어온 다음 클럭에 데이터가 안착하므로,
-            // valid 신호도 똑같이 1클럭 지연시켜서 출력
+            // Data is latched on the clock after i_input_valid, so the valid
+            // signal is delayed by 1 cycle to align with the output.
             /*
             // no en need to valid -> r_valid & r_done properly work
             if (i_input_valid) begin
@@ -120,7 +120,7 @@ module line_buffer_improved #(
     end
 
     // -------------------------------------------------------------------------
-    // 4. 고정 윈도우 출력
+    // 4. Fixed window output
     // -------------------------------------------------------------------------
     always @(posedge i_clk or negedge i_rstn) begin
         if (!i_rstn) begin

@@ -1,9 +1,9 @@
 `timescale 1ns / 1ps
 // packer_8x.v — 8-px parallel pack to 128-bit URAM word.
 //
-// 8-way unroll PE 의 emit 한 cycle = 8 px (= 128 bit). URAM word = 128 bit.
-// 따로 누적 buffer 없이 직접 1:1 pass-through. i_en (= per-emit pulse) 입력에
-// 맞춰 register + URAM write enable 출력.
+// 8-way unroll PE emits 8 px (= 128 bit) per cycle, which matches the URAM
+// word size, so no accumulation buffer is needed: register the data on i_en
+// and assert the URAM write enable on the same pulse.
 //
 // Pipeline : i_en → 1-clk delay → o_uram_we.
 module packer_8x (

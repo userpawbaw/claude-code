@@ -2,18 +2,18 @@
 // top (preset 4_2 UNROLL) : 8-way (L1/L2) + 4-way (L3) parallel SRCNN.
 //
 // Channel chain :
-//   L1 : 1 → 4  ch  (4 URAM_L1 banks).
-//   L2 : 4 → 2  ch  (2 URAM_L2 banks, no time-mux, 2 oc 공간 병렬).
-//   L3 : 2 → 1  ch  (final output stream).
+//   L1 : 1 -> 4 ch  (4 URAM_L1 banks).
+//   L2 : 4 -> 2 ch  (2 URAM_L2 banks, no time-mux; 2 ocs run in parallel).
+//   L3 : 2 -> 1 ch  (final output stream).
 //
-//   - 단일 PU (PU.v, 8×8 pe_group grid 유지, 64 instances)
+//   - One PU (PU.v) carrying an 8x8 pe_group grid = 64 instances.
 //     L1 : g=0..3 = oc 0..3 (in_ch=1 broadcast), lanes 0..7.
 //     L2 : g=0..3 = oc=0 in_ch 0..3, g=4..7 = oc=1 in_ch 0..3, lanes 0..7.
 //     L3 : g=0..1 = in_ch 0..1, lanes 0..3.
-//   - weight BRAM 128b × 30 word (new layout, gen_golden.py 참고)
-//   - input BRAM 128b × 8664 (3 img × 2888).
-//   - URAM_L1 4 bank, 128b × 2888.
-//   - URAM_L2 2 bank, 128b × 2888.
+//   - weight BRAM : 128b x 30 words (new layout, see gen_golden.py).
+//   - input BRAM  : 128b x 8664 (3 img x 2888).
+//   - URAM_L1 : 4 banks, 128b x 2888.
+//   - URAM_L2 : 2 banks, 128b x 2888.
 
 module top #(
     parameter MEM_ADDR    = 17,
@@ -30,7 +30,7 @@ module top #(
     input  wire        i_start,
     output wire        o_img_done,
     output wire        o_all_done,
-    // L3 raw stream — 4 lane × 16 bit + per-px valid (외부 64→16 FIFO 연결).
+    // L3 raw stream : 4 lane x 16 bit + per-px valid (external 64->16 FIFO consumer).
     output wire        o_pixel_valid,
     output wire [63:0] o_pixel_data,
     output wire [3:0]  o_lane_valid
@@ -214,11 +214,11 @@ module top #(
     endgenerate
 
     // ------------------------------------------------------------------
-    // L3 path depacker : URAM_L2 128b/ch (8 px) → 4 px/clk via half-toggle.
-    //   FSM가 L3 동안 intermid_uram_rd_en 을 every-other clk 으로 토글.
-    //   URAM read 결과 latch → r_l3_half=0 → upper 64b (px 0..3),
-    //   r_l3_half=1 → lower 64b (px 4..7). 매 clk r_l3_in_valid 로 line_buffer 공급.
-    //   2 banks active (L3_IC = 2). 나머지 슬롯은 0.
+    // L3 path depacker : URAM_L2 128b/ch (8 px) -> 4 px/clk via half-toggle.
+    //   FSM toggles intermid_uram_rd_en every other clk during L3.
+    //   Latch URAM read result -> r_l3_half=0 emits upper 64b (px 0..3),
+    //   r_l3_half=1 emits lower 64b (px 4..7). r_l3_in_valid feeds the line buffer.
+    //   2 banks active (L3_IC = 2); other slots are zero.
     // ------------------------------------------------------------------
     reg [127:0] r_l3_word [0:MAX_CH-1];
     reg         r_l3_half;
@@ -250,7 +250,7 @@ module top #(
         end
     end
 
-    // 4-px-per-ch slice : upper 64b = px 0..3 (LSB-aligned in line buffer).
+    // 4-px-per-ch slice : upper 64b = px 0..3 (LSB-aligned in the line buffer).
     wire [MAX_CH*64-1:0] w_pu_data_l3;
     generate
         for (b = 0; b < MAX_CH; b = b + 1) begin : gen_l3_slice
@@ -265,8 +265,8 @@ module top #(
 
     // ------------------------------------------------------------------
     // PU input routing for L1/L2 wide path.
-    //   L1 : 1 ch input → slot 0 (MSB 128b), 나머지 0.
-    //   L2 : 4 in_ch = URAM_L1[0..3] → slots 0..3, slots 4..7 = 0.
+    //   L1 : 1 ch input -> slot 0 (MSB 128b), other slots = 0.
+    //   L2 : 4 in_ch = URAM_L1[0..3] -> slots 0..3, slots 4..7 = 0.
     // ------------------------------------------------------------------
     wire [127:0] w_l1_data_in = w_input_dummy_valid ? 128'h0 : w_i_dout;
 
@@ -340,8 +340,8 @@ module top #(
     endgenerate
 
     // ------------------------------------------------------------------
-    // L3 final output : oc 0 slot, 4 px × 16 bit (= 64 bit) + per-px valid.
-    //   slot 0 MSB 4 lane (= lane 0..3) → bits [127:64] of pixel_data.
+    // L3 final output : oc 0 slot, 4 px x 16 bit (= 64 bit) + per-px valid.
+    //   slot 0 upper 4 lanes (lane 0..3) -> bits [127:64] of pixel_data.
     // ------------------------------------------------------------------
     assign o_pixel_valid = (w_layer_cnt == 2'd2) && w_pu_emit_valid && w_pu_oc_mask[0];
     assign o_pixel_data  = w_pu_pixel_data[0 + (4*16) +: 64];   // lane 0..3
