@@ -8,12 +8,12 @@
 //     - L1 weight BRAM    (64-bit Ã— 20,    INIT_FILE)
 //     - L1_local_FSM
 //     - L1_PU              (in_ch=1, out_ch=8 parallel)
-//     - intermid1_2 URAM  (128-bit Ã— 45000)  ?† W-side here, R-port exposed for L2_top
+//     - intermid1_2 URAM  (128-bit Ã— 45000)  ?ï¿½ï¿½ W-side here, R-port exposed for L2_top
 //
 //   Memory layout (URAM):
-//     addr[15]   = image_bit          (?´ë¯¸ì? ?˜?—­ êµì°¨)
+//     addr[15]   = image_bit          (?ï¿½ï¿½ë¯¸ï¿½? ?ï¿½ï¿½?ï¿½ï¿½ êµì°¨)
 //     addr[14:0] = pixel_idx (0~22499) (raster order, 150Ã—150)
-//     data[127:0] = {ch7, ch6, ..., ch1, ch0}  (LSB ?•ˆ?„?— ch0; L2_PU.i_uram_data[16*i+:16] ê³? ?†?„?? ?¼ì¹?)
+//     data[127:0] = {ch7, ch6, ..., ch1, ch0}  (LSB ?ï¿½ï¿½?ï¿½ï¿½?ï¿½ï¿½ ch0; L2_PU.i_uram_data[16*i+:16] ï¿½? ?ï¿½ï¿½?ï¿½ï¿½?? ?ï¿½ï¿½ï¿½?)
 // -----------------------------------------------------------------------------
 
 module L1_top #(
@@ -131,7 +131,7 @@ module L1_top #(
         .i_input_valid         (w_lb_valid),
         .i_pixel_data          (w_lb_data),
 
-        .i_w_rd_en             (w_w_rd_valid),     // 1clk-delayed weight rd_en ?†’ align with rd_dout
+        .i_w_rd_en             (w_w_rd_valid),     // 1clk-delayed weight rd_en ?ï¿½ï¿½ align with rd_dout
         .i_weight_bram_data    (w_w_rd_dout),
 
         .o_pixel_valid         (w_pixel_valid),
@@ -152,7 +152,9 @@ module L1_top #(
         else if (w_pixel_valid)    r_uram_wr_addr <= r_uram_wr_addr + 1'b1;
     end
 
-    wire [MEM_ADDR:0] w_uram_wr_full_addr = {i_image_bit, r_uram_wr_addr};
+    // Pingpong offset addition: image 0 uses [0..22499], image 1 uses [22500..44999].
+    // Avoids out-of-bounds when URAM DEPTH=45000 (vs power-of-2 needed for MSB concat).
+    wire [MEM_ADDR:0] w_uram_wr_full_addr = {1'b0, r_uram_wr_addr} + (i_image_bit ? 16'd22500 : 16'd0);
 
     // =========================================================================
     // intermid1_2 URAM (128-bit Ã— 45000)

@@ -121,7 +121,7 @@ module L2_top #(
     // intermid1_2 URAM R-port forwarding (image_bit MSB prepended)
     // =========================================================================
     assign o_l1_rd_en   = w_uram_rd_en;
-    assign o_l1_rd_addr = {i_image_bit, w_uram_rd_addr};
+    assign o_l1_rd_addr = {1'b0, w_uram_rd_addr} + (i_image_bit ? 16'd22500 : 16'd0);
 
     // =========================================================================
     // L2_PU
@@ -157,7 +157,7 @@ module L2_top #(
         else if (w_pixel_valid)   r_uram_wr_addr <= r_uram_wr_addr + 1'b1;
     end
 
-    wire [MEM_ADDR:0] w_uram_wr_full_addr = {i_image_bit, r_uram_wr_addr};
+    wire [MEM_ADDR:0] w_uram_wr_full_addr = {1'b0, r_uram_wr_addr} + (i_image_bit ? 16'd22500 : 16'd0);
 
     // =========================================================================
     // 4 × intermid2_3 URAM (16-bit × 45000) — one URAM per output channel

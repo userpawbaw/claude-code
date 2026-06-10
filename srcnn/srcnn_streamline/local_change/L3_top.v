@@ -3,8 +3,8 @@
 // L3 top (streamline)
 //  - L3 weight BRAM (64-bit x 10): 9 weight + 1 bias word, 1 set (out_ch=1)
 //  - L3_local_FSM + L3_PU
-//  - intermid2_3 URAM R-port ?“œ?¼?´ë¸? (L2_top ?‚´ 4ê°? URAM ?™?‹œ ?½ê¸?)
-//  - URAM/output addr ?—†?Œ. final pixel 16bit + valid ê·¸ë?ë¡? ?…¸ì¶?.
+//  - intermid2_3 URAM R-port ?ï¿½ï¿½?ï¿½ï¿½?ï¿½ï¿½ï¿½? (L2_top ?ï¿½ï¿½ 4ï¿½? URAM ?ï¿½ï¿½?ï¿½ï¿½ ?ï¿½ï¿½ï¿½?)
+//  - URAM/output addr ?ï¿½ï¿½?ï¿½ï¿½. final pixel 16bit + valid ê·¸ï¿½?ï¿½? ?ï¿½ï¿½ï¿½?.
 
 module L3_top #(
     parameter MEM_ADDR    = 15,
@@ -13,15 +13,15 @@ module L3_top #(
     input  wire                          i_clk,
     input  wire                          i_rstn,
     input  wire                          i_start,
-    input  wire                          i_image_bit,    // global FSM?—?„œ ì£¼ì…
+    input  wire                          i_image_bit,    // global FSM?ï¿½ï¿½?ï¿½ï¿½ ì£¼ì…
 
-    // Drives intermid2_3 URAM R-ports at L2_top (?™?¼ addr/en?„ 4 ch?— broadcast)
+    // Drives intermid2_3 URAM R-ports at L2_top (?ï¿½ï¿½?ï¿½ï¿½ addr/en?ï¿½ï¿½ 4 ch?ï¿½ï¿½ broadcast)
     output wire [3:0]                    o_l2_rd_en,
     output wire [4*(MEM_ADDR+1)-1:0]     o_l2_rd_addr_packed,
     input  wire [4*16-1:0]               i_l2_rd_dout_packed,
     input  wire [3:0]                    i_l2_rd_valid,
 
-    // Final pixel output (?™¸ë¶? ?›„ì²˜ë¦¬ë¡? ì§ì ‘ ?˜? ¤ë³´ëƒ„)
+    // Final pixel output (?ï¿½ï¿½ï¿½? ?ï¿½ï¿½ì²˜ë¦¬ï¿½? ì§ì ‘ ?ï¿½ï¿½?ï¿½ï¿½ë³´ëƒ„)
     output wire                          o_pixel_valid,
     output wire [15:0]                   o_pixel_data,
 
@@ -88,22 +88,22 @@ module L3_top #(
     );
 
     // ====== intermid2_3 URAM R-port forwarding ======
-    // 4 ch ëª¨ë‘ ?™?¼ addr / en ?œ¼ë¡? broadcast.
-    // addr = {image_bit, FSM?˜ pixel_addr}
-    wire [MEM_ADDR:0] w_full_rd_addr = {i_image_bit, w_uram_rd_addr};
+    // 4 ch ëª¨ë‘ ?ï¿½ï¿½?ï¿½ï¿½ addr / en ?ï¿½ï¿½ï¿½? broadcast.
+    // addr = {image_bit, FSM?ï¿½ï¿½ pixel_addr}
+    wire [MEM_ADDR:0] w_full_rd_addr = {1'b0, w_uram_rd_addr} + (i_image_bit ? 16'd22500 : 16'd0);
     assign o_l2_rd_en          = {4{w_uram_rd_en}};
     assign o_l2_rd_addr_packed = {w_full_rd_addr, w_full_rd_addr, w_full_rd_addr, w_full_rd_addr};
 
     // i_l2_rd_dout_packed[63:0] = {ch3, ch2, ch1, ch0} (LSB=ch0)
-    // valid ?™?•„?•ˆ ?•˜?‚˜ë§? ?“°ë©? ?¨ (4ê°? ?™?¼)
+    // valid ?ï¿½ï¿½?ï¿½ï¿½?ï¿½ï¿½ ?ï¿½ï¿½?ï¿½ï¿½ï¿½? ?ï¿½ï¿½ï¿½? ?ï¿½ï¿½ (4ï¿½? ?ï¿½ï¿½?ï¿½ï¿½)
     wire [15:0] w_ch [0:3];
     assign w_ch[0] = i_l2_rd_dout_packed[0  +: 16];
     assign w_ch[1] = i_l2_rd_dout_packed[16 +: 16];
     assign w_ch[2] = i_l2_rd_dout_packed[32 +: 16];
     assign w_ch[3] = i_l2_rd_dout_packed[48 +: 16];
 
-    wire [63:0] w_pu_input_data  = {w_ch[3], w_ch[2], w_ch[1], w_ch[0]}; // ?™?¼ ì»¨ë²¤?…˜
-    wire        w_pu_input_valid = i_l2_rd_valid[0]; // 4ch ?™ê¸°ì´ë¯?ë¡? [0]ë§? ì°¸ì¡°
+    wire [63:0] w_pu_input_data  = {w_ch[3], w_ch[2], w_ch[1], w_ch[0]}; // ?ï¿½ï¿½?ï¿½ï¿½ ì»¨ë²¤?ï¿½ï¿½
+    wire        w_pu_input_valid = i_l2_rd_valid[0]; // 4ch ?ï¿½ï¿½ê¸°ì´ï¿½?ï¿½? [0]ï¿½? ì°¸ì¡°
 
     // ====== L3_PU ======
     L3_PU u_pu (
