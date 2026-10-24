@@ -1,0 +1,129 @@
+{
+  "schema_version": "1.0.0",
+  "course_id": "ai-midterm-demo",
+  "is_fictional_data": true,
+  "exam_scope": {
+    "included": [
+      "W2",
+      "W3",
+      "W4",
+      "W6",
+      "LAB-LR",
+      "LAB-SOFTMAX",
+      "LAB-KMEANS",
+      "LAB-MNIST"
+    ],
+    "excluded_with_evidence": [],
+    "unknown": [
+      "exam_format",
+      "official_exclusions"
+    ]
+  },
+  "sources": [
+    {
+      "source_id": "W2",
+      "filename": "W2_Mathematics_for_AI.pdf",
+      "sha256": null,
+      "access": "not_attached",
+      "coverage": "partial",
+      "locator_scheme": "pdf-1-based",
+      "verified_ranges": [
+        {
+          "locator": "p.4-7",
+          "verification": "verified"
+        }
+      ]
+    },
+    {
+      "source_id": "LAB-MNIST",
+      "filename": "W6_MNIST_1.ipynb",
+      "sha256": null,
+      "access": "not_attached",
+      "coverage": "uninspected",
+      "locator_scheme": "notebook-cell-0-based",
+      "verified_ranges": []
+    }
+  ],
+  "current_pass": 1,
+  "next_unit_id": "W2-PROB-02",
+  "units": [
+    {
+      "unit_id": "W2-PROB-01",
+      "title": "표본공간과 사건",
+      "parent_id": "W2-PROB",
+      "source_refs": [
+        {
+          "source_id": "W2",
+          "locator": "p.4-7",
+          "verification": "verified"
+        }
+      ],
+      "prerequisite_ids": [],
+      "status_by_pass": {
+        "P1": "assessed",
+        "P2": "not_started"
+      }
+    },
+    {
+      "unit_id": "W2-PROB-02",
+      "title": "조건부확률과 독립성",
+      "parent_id": "W2-PROB",
+      "source_refs": [
+        {
+          "source_id": "W2",
+          "locator": "verification_pending",
+          "verification": "needs_review"
+        }
+      ],
+      "prerequisite_ids": [
+        "W2-PROB-01"
+      ],
+      "status_by_pass": {
+        "P1": "not_started",
+        "P2": "not_started"
+      }
+    }
+  ],
+  "question_attempts": [
+    {
+      "question_id": "DEMO-Q001",
+      "unit_ids": [
+        "W2-PROB-01"
+      ],
+      "pass": 1,
+      "correctness": "correct",
+      "confidence": "low",
+      "error_tags": [],
+      "attempted_at": "2026-10-25T00:00:00+09:00",
+      "fictional": true
+    }
+  ],
+  "review_queue": [
+    {
+      "concept_id": "W2-PROB-01",
+      "reason": "low_confidence_correct",
+      "earliest_due": null,
+      "priority": "normal"
+    }
+  ],
+  "open_questions": [
+    {
+      "id": "DEMO-O001",
+      "text": "정확한 시험 제외 페이지는 공식 공지로 확인 필요",
+      "source_id": "W2",
+      "next_action": "공식 범위 확인"
+    }
+  ],
+  "session_log": [
+    {
+      "session_id": "demo-session-001",
+      "pass": 1,
+      "covered_unit_ids": [
+        "W2-PROB-01"
+      ],
+      "next_action": "W2-PROB-02 원본 위치 확인 후 P1 수업",
+      "note": "가상 진행 상태. 실제 사용자 답변이나 완료 기록이 아님."
+    }
+  ],
+  "full_pass_complete": false
+}
