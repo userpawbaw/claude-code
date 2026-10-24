@@ -60,4 +60,4 @@ learning-systems/spiral-study/
 - **시스템 설계 문서는 공개 가능한 일반 규칙**으로 작성했다. 강의 원본 PDF, 과제 풀이, 개인정보와 원본 저작물 전체를 이 저장소에 업로드하지 않는다.
 - 각 과목별 진행 데이터는 별도 로컬/개인 저장소에 보관하고 파일명·해시·페이지/셀 번호를 기록한다.
 - 이 폴더는 학습 방법/실행 계약이며, 특정 챗봇에서 자동으로 Skill이 설치되거나 대화 상태가 무조건 공유된다는 의미가 아니다.
-- 자세한 판단 근거는 [DESIGN.md](DESIGN.md), 연구 결과와 제한은 [RESEARCH.md](RESEARCH.md), 실제 운영법은 [PROTOCOL.md](PROTOCOL.md)를 참고.
+- 자세한 판단 근거는 [DESIGN.md](DESIGN.md), 연구 결과와 제한은 [RESEARCH.md](RESEARCH.md), 실제 운영법은 [PROTOCOL.md](PROTOCOL.md), 품질검수는 [VALIDATION.md](VALIDATION.md)를 참고.
